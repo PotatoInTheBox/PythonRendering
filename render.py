@@ -46,23 +46,101 @@ class Renderer:
         if PASSTHROUGH:
             pygame.draw.line(self.screen, color, start, end, width)
             return
-        # Calculate step direction
-        if end[0] - start[0] < 0:
-            dx = -1
-        else:
-            dx = 1
-        if end[1] - start[1] < 0:
-            dy = -1
-        else:
-            dy = 1
-        cur_y = start[1]
-        for i, x in enumerate(range(start[0], end[0] + dx, dx)):
-            slope = end[1] - start[1] if end[0] - start[0] == 0 else (end[1] - start[1]) / (end[0] - start[0])
-            start_y = cur_y
-            end_y = start_y + slope
-            for y in range(int(start_y), int(end_y) + dy, dy):
-                self.draw_pixel((x, y), color)
-            cur_y = end_y
+        
+        # self.custom_differential_draw_line(start, end, color)
+        self.bresenhams_algorithm_draw_line(start, end, color)
+
+    def bresenhams_algorithm_draw_line(self, start, end, color):
+        is_x_flipped = False  # for handling slope < 0
+        is_x_dominant_axis = False  # for handling slope > 1
+        
+        x1 = start[0]
+        x2 = end[0]
+        y1 = start[1]
+        y2 = end[1]
+        
+        # Handle x1 > x2 edge case (swap (x2, y2) and (x1, y1))
+        if x1 > x2:
+            # flip start and end
+            tx, ty = x1, y1
+            x1, y1 = x2, y2
+            x2, y2 = tx, ty
+        
+        # Handle slope < 0
+        if y2 - y1 < 0:
+            # change (x1, y1) to (x1, -y1) and (x2, y2) to (x2, -y2)
+            y1 *= -1
+            y2 *= -1
+            is_x_flipped = True
+        
+        # Handle slope > 1
+        if y2 - y1 > x2 - x1:
+            # exchange x and y values. So x1 becomes y1
+            t2, t1 = x2, x1
+            x2, x1 = y2, y1
+            y2, y1 = t2, t1
+            is_x_dominant_axis = True
+        
+        dx = (x2 - x1)
+        dy = (y2 - y1)
+        p = 2 * (dy - dx)
+        x = x1
+        y = y1
+        
+        while x <= x2:
+            out_x = x
+            out_y = y
+            # undo "slope > 1" edge case
+            if is_x_dominant_axis:
+                tmp = out_x
+                out_x = out_y
+                out_y = tmp
+            # undo "slope < 0" edge case
+            out_y = out_y if not is_x_flipped else out_y * -1
+
+            self.draw_pixel((out_x, out_y), color)
+            x += 1
+            if p < 0:
+                p += 2 * dy
+            else:
+                p += 2 * (dy - dx)
+                y += 1
+
+    # A custom draw line using a differential approach where the slope
+    # accumilates over a dominant axis.
+    def custom_differential_draw_line(self, start, end, color):
+        x_len = end[0] - start[0]
+        y_len = end[1] - start[1]
+
+        # Figure out if we want out line to be horizontal or vertical 
+        # (line with slope <= 1 wins)
+        is_horizontal = True if abs(x_len) >= abs(y_len) else False
+        
+        # Figure out which length to use as our "run" (higher number wins)
+        run_start = start[0] if is_horizontal else start[1]
+        run_end = end[0] if is_horizontal else end[1]
+        rise_start = start[1] if is_horizontal else start[0]
+        rise_end = end[1] if is_horizontal else end[0]
+        run_length = run_end - run_start
+        rise_length = rise_end - rise_start
+        
+        # Calculate step direction (for "run" increment and "rise" sign)
+        run_step = 1 if run_length >= 0 else -1
+        rise_step = 1 if rise_length >= 0 else -1
+        
+        # Finally, a line of code that makes sense
+        slope = (abs(rise_length) / abs(run_length)) * rise_step
+        
+        # Accumilate our rise
+        rise_acc = float(rise_start)
+        for i, run_cur in enumerate(range(run_start, run_end + run_step, run_step)):
+            if is_horizontal:
+                self.draw_pixel((run_cur, int(rise_acc)), color)
+            else:
+                self.draw_pixel((int(rise_acc), run_cur), color)
+            rise_acc += slope
+            
+
 
     def draw_square(self, top_left: Tuple[int, int], size: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
@@ -124,7 +202,7 @@ class Renderer:
             y2 = int(cy + length * math.sin(angle))
             self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
             
-            angle += 0.01
+            angle += 0.025
 
             if not PASSTHROUGH:
                 self.render_buffer()
