@@ -9,6 +9,11 @@
 import pygame
 import math
 import time
+import sys
+import ctypes
+# Make windows not scale this window (pixels do have to be perfect)
+if sys.platform == "win32":
+    ctypes.windll.user32.SetProcessDPIAware()
 
 PASSTHROUGH = False  # Toggle between passthrough and simulated draw
 DRAW_PIXEL_BORDER = True  # Toggle to draw a border around pixels
@@ -25,7 +30,7 @@ COLOR_WHITE = (255, 255, 255)
 COLOR_DARK_GRAY = (50, 50, 50)
 
 class Renderer:
-    def __init__(self, width: int = 400, height: int = 400, grid_size: int = 40) -> None:
+    def __init__(self, width: int = 1000, height: int = 1000, grid_size: int = 40) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -50,6 +55,8 @@ class Renderer:
         # self.custom_differential_draw_line(start, end, color)
         self.bresenhams_algorithm_draw_line(start, end, color)
 
+    # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
+    # TODO Still needs to be improved
     def bresenhams_algorithm_draw_line(self, start, end, color):
         is_x_flipped = False  # for handling slope < 0
         is_x_dominant_axis = False  # for handling slope > 1
@@ -83,7 +90,7 @@ class Renderer:
         
         dx = (x2 - x1)
         dy = (y2 - y1)
-        p = 2 * (dy - dx)
+        p = 2 * dy - dx
         x = x1
         y = y1
         
@@ -193,16 +200,35 @@ class Renderer:
                 self.draw_line((6, 6), (11, 8), COLOR_GREEN)
                 self.draw_line((2, 2), (5, 5), COLOR_WHITE)
                 self.draw_square((10,10), 5, COLOR_WHITE)
+            
+            # Line pointing to mouse
+            cx, cy = self.grid_size // 2, self.grid_size // 2
+            mx, my = pygame.mouse.get_pos()
+            mx //= self.cell_size
+            my //= self.cell_size
+
+            dx = mx - cx
+            dy = my - cy
+            dist = math.hypot(dx, dy)
+
+            max_length = 20
+            if dist > 0:
+                scale = min(max_length / dist, 1.0)
+                tx = cx + int(dx * scale)
+                ty = cy + int(dy * scale)
+                self.draw_line((cx, cy), (tx, ty), COLOR_WHITE)
+            
+            
 
             # Spinning line (10px long from center)
-            cx, cy = self.grid_size // 2, self.grid_size // 2
-            length = 20
-            global angle
-            x2 = int(cx + length * math.cos(angle))
-            y2 = int(cy + length * math.sin(angle))
-            self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
+            # cx, cy = self.grid_size // 2, self.grid_size // 2
+            # length = 20
+            # global angle
+            # x2 = int(cx + length * math.cos(angle))
+            # y2 = int(cy + length * math.sin(angle))
+            # self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
             
-            angle += 0.025
+            # angle += 0.025
 
             if not PASSTHROUGH:
                 self.render_buffer()
