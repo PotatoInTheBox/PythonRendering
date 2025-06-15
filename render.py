@@ -51,12 +51,10 @@ class Renderer:
         if PASSTHROUGH:
             pygame.draw.line(self.screen, color, start, end, width)
             return
-        
-        # self.custom_differential_draw_line(start, end, color)
+
         self.bresenhams_algorithm_draw_line(start, end, color)
 
     # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
-    # TODO Still needs to be improved
     def bresenhams_algorithm_draw_line(self, start, end, color):
         is_x_flipped = False  # for handling slope < 0
         is_x_dominant_axis = False  # for handling slope > 1
@@ -113,42 +111,6 @@ class Renderer:
                 p += 2 * (dy - dx)
                 y += 1
 
-    # A custom draw line using a differential approach where the slope
-    # accumilates over a dominant axis.
-    def custom_differential_draw_line(self, start, end, color):
-        x_len = end[0] - start[0]
-        y_len = end[1] - start[1]
-
-        # Figure out if we want out line to be horizontal or vertical 
-        # (line with slope <= 1 wins)
-        is_horizontal = True if abs(x_len) >= abs(y_len) else False
-        
-        # Figure out which length to use as our "run" (higher number wins)
-        run_start = start[0] if is_horizontal else start[1]
-        run_end = end[0] if is_horizontal else end[1]
-        rise_start = start[1] if is_horizontal else start[0]
-        rise_end = end[1] if is_horizontal else end[0]
-        run_length = run_end - run_start
-        rise_length = rise_end - rise_start
-        
-        # Calculate step direction (for "run" increment and "rise" sign)
-        run_step = 1 if run_length >= 0 else -1
-        rise_step = 1 if rise_length >= 0 else -1
-        
-        # Finally, a line of code that makes sense
-        slope = (abs(rise_length) / abs(run_length)) * rise_step
-        
-        # Accumilate our rise
-        rise_acc = float(rise_start)
-        for i, run_cur in enumerate(range(run_start, run_end + run_step, run_step)):
-            if is_horizontal:
-                self.draw_pixel((run_cur, int(rise_acc)), color)
-            else:
-                self.draw_pixel((int(rise_acc), run_cur), color)
-            rise_acc += slope
-            
-
-
     def draw_square(self, top_left: Tuple[int, int], size: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             pygame.draw.rect(self.screen, color, (*top_left, size, size))
@@ -167,8 +129,15 @@ class Renderer:
             self.rgb_buffer[y][x] = color
 
     def draw_circle(self, center: Tuple[int, int], radius: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
+        if PASSTHROUGH:
+            pygame.draw.circle(self.screen, color, center, radius)
+            return
 
-        pass
+        sqrt_limit = radius**2
+        for y in range(center[1] - radius, center[1] + radius):
+            for x in range(center[0] - radius, center[0] + radius):
+                if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
+                    self.rgb_buffer[y][x] = color
 
     def render_buffer(self):
         for y in range(self.grid_size):
@@ -200,6 +169,42 @@ class Renderer:
                 self.draw_line((6, 6), (11, 8), COLOR_GREEN)
                 self.draw_line((2, 2), (5, 5), COLOR_WHITE)
                 self.draw_square((10,10), 5, COLOR_WHITE)
+                
+                # Spinning line (10px long from center)
+                cx, cy = self.grid_size // 2, self.grid_size // 2
+                length = 20
+                global angle
+                x2 = int(cx + length * math.cos(angle))
+                y2 = int(cy + length * math.sin(angle))
+                self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
+                
+                angle += 0.025
+            
+                # Line pointing to mouse
+                cx, cy = self.grid_size // 2, self.grid_size // 2
+                mx, my = pygame.mouse.get_pos()
+                mx //= self.cell_size
+                my //= self.cell_size
+
+                dx = mx - cx
+                dy = my - cy
+                dist = math.hypot(dx, dy)
+
+                max_length = 20
+                if dist > 0:
+                    scale = min(max_length / dist, 1.0)
+                    tx = cx + int(dx * scale)
+                    ty = cy + int(dy * scale)
+                    self.draw_line((cx, cy), (tx, ty), COLOR_WHITE)
+            
+            
+            self.draw_pixel((0, 0), COLOR_RED)
+            self.draw_pixel((1, 1), COLOR_BLUE)
+            self.draw_pixel((1, 0), COLOR_GREEN)
+            self.draw_line((6, 6), (11, 8), COLOR_GREEN)
+            self.draw_line((2, 2), (5, 5), COLOR_WHITE)
+            self.draw_square((10,10), 5, COLOR_WHITE)
+            self.draw_circle((20, 8), 8, COLOR_GREEN)
             
             # Line pointing to mouse
             cx, cy = self.grid_size // 2, self.grid_size // 2
@@ -218,17 +223,6 @@ class Renderer:
                 ty = cy + int(dy * scale)
                 self.draw_line((cx, cy), (tx, ty), COLOR_WHITE)
             
-            
-
-            # Spinning line (10px long from center)
-            # cx, cy = self.grid_size // 2, self.grid_size // 2
-            # length = 20
-            # global angle
-            # x2 = int(cx + length * math.cos(angle))
-            # y2 = int(cy + length * math.sin(angle))
-            # self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
-            
-            # angle += 0.025
 
             if not PASSTHROUGH:
                 self.render_buffer()
