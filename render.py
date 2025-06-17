@@ -15,7 +15,7 @@ import ctypes
 if sys.platform == "win32":
     ctypes.windll.user32.SetProcessDPIAware()
 
-PASSTHROUGH = False  # Toggle between passthrough and simulated draw
+PASSTHROUGH = False # Toggle between passthrough and simulated draw
 DRAW_PIXEL_BORDER = True  # Toggle to draw a border around pixels
 PIXEL_BORDER_SIZE = 1  # Size of the pixel border
 
@@ -138,6 +138,7 @@ class Renderer:
             for x in range(center[0] - radius, center[0] + radius):
                 if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
                     self.rgb_buffer[y][x] = color
+    
 
     def render_buffer(self):
         for y in range(self.grid_size):
@@ -160,7 +161,7 @@ class Renderer:
             self.screen.fill((0, 0, 0))
 
             # Drawing demo here
-            if False:
+            if True:
                 # self.draw_line((0, 0), (self.width, self.height), (255, 0, 0))
                 # self.draw_square((50, 50), 100, (0, 255, 0))
                 self.draw_pixel((0, 0), COLOR_RED)
@@ -169,6 +170,7 @@ class Renderer:
                 self.draw_line((6, 6), (11, 8), COLOR_GREEN)
                 self.draw_line((2, 2), (5, 5), COLOR_WHITE)
                 self.draw_square((10,10), 5, COLOR_WHITE)
+                self.draw_circle((20, 8), 8, COLOR_GREEN)
                 
                 # Spinning line (10px long from center)
                 cx, cy = self.grid_size // 2, self.grid_size // 2
@@ -197,31 +199,6 @@ class Renderer:
                     ty = cy + int(dy * scale)
                     self.draw_line((cx, cy), (tx, ty), COLOR_WHITE)
             
-            
-            self.draw_pixel((0, 0), COLOR_RED)
-            self.draw_pixel((1, 1), COLOR_BLUE)
-            self.draw_pixel((1, 0), COLOR_GREEN)
-            self.draw_line((6, 6), (11, 8), COLOR_GREEN)
-            self.draw_line((2, 2), (5, 5), COLOR_WHITE)
-            self.draw_square((10,10), 5, COLOR_WHITE)
-            self.draw_circle((20, 8), 8, COLOR_GREEN)
-            
-            # Line pointing to mouse
-            cx, cy = self.grid_size // 2, self.grid_size // 2
-            mx, my = pygame.mouse.get_pos()
-            mx //= self.cell_size
-            my //= self.cell_size
-
-            dx = mx - cx
-            dy = my - cy
-            dist = math.hypot(dx, dy)
-
-            max_length = 20
-            if dist > 0:
-                scale = min(max_length / dist, 1.0)
-                tx = cx + int(dx * scale)
-                ty = cy + int(dy * scale)
-                self.draw_line((cx, cy), (tx, ty), COLOR_WHITE)
             
 
             if not PASSTHROUGH:
