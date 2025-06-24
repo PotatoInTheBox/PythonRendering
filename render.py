@@ -28,9 +28,10 @@ COLOR_GREEN = (0, 255, 0)
 COLOR_BLUE = (0, 0, 255)
 COLOR_WHITE = (255, 255, 255)
 COLOR_DARK_GRAY = (50, 50, 50)
+COLOR_PINK = (255, 105, 180)
 
 class Renderer:
-    def __init__(self, width: int = 1000, height: int = 1000, grid_size: int = 40) -> None:
+    def __init__(self, width: int = 700, height: int = 700, grid_size: int = 100) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -139,6 +140,101 @@ class Renderer:
                 if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
                     self.rgb_buffer[y][x] = color
     
+    def draw_polygon(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED):
+        if PASSTHROUGH:
+            pygame.draw.polygon(self.screen, color, [p1, p2, p3])
+        
+        # Find bounding box for the triangle
+        xs = [p1[0], p2[0], p3[0]]  # all the x positions
+        ys = [p1[1], p2[1], p3[1]]  # all the y positions
+        smallest_x = min(xs)
+        largest_x = max(xs)
+        smallest_y = min(ys)
+        largest_y = max(ys)
+        
+        # Sort the points by their x-coordinate (ascending)
+        points = sorted([p1, p2, p3], key=lambda p: p[0])
+        first_point = points[0]   # smallest x
+        middle_point = points[1]  # middle x
+        last_point = points[2]    # largest x
+        
+        
+        for y in range(smallest_y, largest_y + 1):
+            from_x = 0
+            to_x = 0
+            
+            def interpolate_int(from_num: int, to_num: int, blend_ratio: float, flip=False) -> int:
+                if flip: return int(to_num - ((to_num - from_num)*blend_ratio))
+                return int(from_num + ((to_num - from_num)*blend_ratio))
+            def calc_blend_ratio(from_num: int, to_num: int, curr_num: int) -> float:
+                if (to_num - from_num) == 0: return 0  # we don't really know if it is between [0-1]
+                return (curr_num - from_num)/(to_num - from_num)
+            
+            
+            # do math to calculate from and to
+            # TODO: all triangles but 3/4 of acute angles are working
+            if (y < first_point[1]) ^ (middle_point[1] > last_point[1]):  # where ^ is XOR
+                if (first_point[1] - middle_point[1]) == 0:
+                    from_x = first_point[0]
+                else:
+                    blend_ratio = calc_blend_ratio(middle_point[1], first_point[1], y)
+                    from_x = interpolate_int(middle_point[0], first_point[0], blend_ratio)
+                    # from_x = -((y - smallest_y) / (first_point[1] - middle_point[1])) * (middle_point[0] - first_point[0]) + middle_point[0]
+            else:
+                if (last_point[1] - first_point[1]) == 0:
+                    from_x = first_point[0]
+                else:
+                    blend_ratio = calc_blend_ratio(first_point[1], last_point[1], y)
+                    from_x = interpolate_int(first_point[0], last_point[0], blend_ratio)
+                    # from_x = ((y - first_point[1]) / (last_point[1] - first_point[1])) * (last_point[0] - first_point[0]) + first_point[0]
+            
+            if (y < last_point[1]) ^ (middle_point[1] > last_point[1]):  # where ^ is XOR
+                if (last_point[1] - middle_point[1]) == 0:
+                    to_x = middle_point[0]
+                else:
+                    blend_ratio = calc_blend_ratio(middle_point[1], last_point[1], y)
+                    to_x = interpolate_int(middle_point[0], last_point[0], blend_ratio)
+                    # to_x = ((y - smallest_y) / (last_point[1] - middle_point[1])) * (last_point[0] - middle_point[0]) + middle_point[0]
+            else:
+                if (first_point[1] - last_point[1]) == 0:
+                    to_x = first_point[0]
+                else:
+                    blend_ratio = calc_blend_ratio(last_point[1], first_point[1], y)
+                    to_x = interpolate_int(first_point[0], last_point[0], blend_ratio, flip=(first_point[1]<last_point[1])^(middle_point[1] < last_point[1]))
+                    # to_x = ((y - last_point[1]) / (first_point[1] - last_point[1])) * (first_point[0] - last_point[0]) + last_point[0]
+            
+            
+            
+            
+            # draw the row
+            for x in range(int(from_x), int(to_x)):
+                if self._is_bounded((x,y)):
+                    self.rgb_buffer[y][x] = color
+        
+        
+            # debug draw points
+            for p in points:
+                if self._is_bounded((p[0],p[1])):
+                    self.rgb_buffer[p[1]][p[0]] = COLOR_PINK
+        
+        
+        
+        
+        
+
+        # Barycentric coordinate method to fill the triangle
+        # def edge(p1, p2, p):
+        #     return (p[0] - p1[0]) * (p2[1] - p1[1]) - (p[1] - p1[1]) * (p2[0] - p1[0])
+
+        # for y in range(smallest_y, largest_y + 1):
+        #     for x in range(smallest_x, largest_x + 1):
+        #     p = (x, y)
+        #     w0 = edge(x2, x3, p)
+        #     w1 = edge(x3, x1, p)
+        #     w2 = edge(x1, x2, p)
+        #     if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+        #         if self._is_bounded(p):
+        #         self.rgb_buffer[y][x] = color
 
     def render_buffer(self):
         for y in range(self.grid_size):
@@ -171,6 +267,7 @@ class Renderer:
                 self.draw_line((2, 2), (5, 5), COLOR_WHITE)
                 self.draw_square((10,10), 5, COLOR_WHITE)
                 self.draw_circle((20, 8), 8, COLOR_GREEN)
+                self.draw_polygon((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
                 
                 # Spinning line (10px long from center)
                 cx, cy = self.grid_size // 2, self.grid_size // 2
@@ -180,24 +277,46 @@ class Renderer:
                 y2 = int(cy + length * math.sin(angle))
                 self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
                 
-                angle += 0.025
-            
-                # Line pointing to mouse
-                cx, cy = self.grid_size // 2, self.grid_size // 2
+                angle += 0.01
+                
+                # Polygon follows mouse, left click cycles which point is moved
+                if not hasattr(self, "poly_points"):
+                    cx, cy = self.grid_size // 2, self.grid_size // 2
+                    self.poly_points = [
+                        [cx - 10, cy - 5],
+                        [cx + 10, cy - 5],
+                        [cx, cy + 10]
+                    ]
+                    self.active_point = 0
+
                 mx, my = pygame.mouse.get_pos()
                 mx //= self.cell_size
                 my //= self.cell_size
 
-                dx = mx - cx
-                dy = my - cy
-                dist = math.hypot(dx, dy)
+                # Move the active point to mouse position
+                self.poly_points[self.active_point][0] = mx
+                self.poly_points[self.active_point][1] = my
 
-                max_length = 20
-                if dist > 0:
-                    scale = min(max_length / dist, 1.0)
-                    tx = cx + int(dx * scale)
-                    ty = cy + int(dy * scale)
-                    self.draw_line((cx, cy), (tx, ty), COLOR_WHITE)
+                # Draw the polygon
+                self.draw_polygon(
+                    (self.poly_points[0][0], self.poly_points[0][1]),
+                    (self.poly_points[1][0], self.poly_points[1][1]),
+                    (self.poly_points[2][0], self.poly_points[2][1]),
+                    COLOR_WHITE
+                )
+
+                # Draw points for visual feedback
+                for idx, pt in enumerate(self.poly_points):
+                    color = COLOR_RED if idx == self.active_point else COLOR_BLUE
+                    self.draw_square((pt[0], pt[1]), 2, color)
+
+                # Handle mouse click to cycle active point
+                for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                    if event.button == 1:  # Left click
+                        self.active_point = (self.active_point + 1) % 3
+                        print(self.poly_points)
+                    if event.type == pygame.QUIT:
+                        self.running = False
             
             
 
@@ -211,9 +330,9 @@ class Renderer:
             pygame.display.flip()
             self.clock.tick(60)
 
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.running = False
+            # for event in pygame.event.get():
+            #     if event.type == pygame.QUIT:
+            #         self.running = False
 
         pygame.quit()
 
