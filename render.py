@@ -43,6 +43,8 @@ class Renderer:
 
         # Initialize 2D RGB buffer
         self.rgb_buffer = [[(0, 0, 0) for _ in range(grid_size)] for _ in range(grid_size)]
+        # Initialize 2D polygon buffer
+        self.polygons_2d = []
         
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
@@ -140,7 +142,7 @@ class Renderer:
                 if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
                     self.rgb_buffer[y][x] = color
     
-    def draw_polygon(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED):
+    def fill_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
         
@@ -198,6 +200,22 @@ class Renderer:
         #         if self._is_bounded(p):
         #         self.rgb_buffer[y][x] = color
 
+    def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
+        self.draw_line(p1, p2, color)
+        self.draw_line(p2, p3, color)
+        self.draw_line(p3, p1, color)
+    
+    def draw_polygons_2d(self):
+        # So what we are going to do is draw polygons from a buffer/list containing polygons.
+        # We want to scan every single pixel and draw if a polygon intersects.
+        # Initially, it will be a 2d implementation, then it will move to 3d.
+        
+        
+        
+        
+        
+        pass
+
     def render_buffer(self):
         for y in range(self.grid_size):
             for x in range(self.grid_size):
@@ -229,7 +247,7 @@ class Renderer:
                 self.draw_line((2, 2), (5, 5), COLOR_WHITE)
                 self.draw_square((10,10), 5, COLOR_WHITE)
                 self.draw_circle((20, 8), 8, COLOR_GREEN)
-                self.draw_polygon((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
+                self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
                 
                 # Spinning line (10px long from center)
                 cx, cy = self.grid_size // 2, self.grid_size // 2
@@ -260,7 +278,7 @@ class Renderer:
                 self.poly_points[self.active_point][1] = my
 
                 # Draw the polygon
-                self.draw_polygon(
+                self.fill_triangle(
                     (self.poly_points[0][0], self.poly_points[0][1]),
                     (self.poly_points[1][0], self.poly_points[1][1]),
                     (self.poly_points[2][0], self.poly_points[2][1]),

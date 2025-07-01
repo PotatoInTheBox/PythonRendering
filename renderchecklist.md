@@ -5,14 +5,14 @@
 > Goal: Render 2D triangles using basic rasterization
 
 ### Setup
-- [ ] Create a framebuffer or pixel buffer (e.g. 2D array of RGB values)
-- [ ] Setup a windowing/drawing system (e.g. Pygame, tkinter)
+- [x] Create a framebuffer or pixel buffer (e.g. 2D array of RGB values)
+- [x] Setup a windowing/drawing system (e.g. Pygame, tkinter)
 
 ### Triangle Drawing
-- [ ] Represent a triangle with 3 (x, y) points
-- [ ] Use bounding box to scan triangle area
-- [ ] Use interpolation or barycentric coordinates to fill pixels
-- [ ] Apply constant color per triangle
+- [x] Represent a triangle with 3 (x, y) points
+- [x] Use bounding box to scan triangle area
+- [x] Use interpolation or barycentric coordinates to fill pixels
+- [x] Apply constant color per triangle
 
 ### Math Primitives
 - [ ] 2D vector add/sub/dot/scalar multiply
