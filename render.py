@@ -201,6 +201,9 @@ class Renderer:
         #         self.rgb_buffer[y][x] = color
 
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
+        if PASSTHROUGH:
+            pygame.draw.lines(self.screen, color, True, [p1, p2, p3])
+            return
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
