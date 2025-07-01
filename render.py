@@ -144,22 +144,10 @@ class Renderer:
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
         
-        # Find bounding box for the triangle
-        xs = [p1[0], p2[0], p3[0]]  # all the x positions
-        ys = [p1[1], p2[1], p3[1]]  # all the y positions
-        smallest_x = min(xs)
-        largest_x = max(xs)
-        smallest_y = min(ys)
-        largest_y = max(ys)
-        
         # Sort the points by their x-coordinate (ascending)
-        points = sorted([p1, p2, p3], key=lambda p: p[0])
-        first_point = points[0]   # smallest x
-        middle_point = points[1]  # middle x
-        last_point = points[2]    # largest x
+        points_y = sorted([p1, p2, p3], key=lambda p: p[1])
         
-        
-        for y in range(smallest_y, largest_y + 1):
+        for y in range(points_y[0][1], points_y[2][1] + 1):
             from_x = 0
             to_x = 0
             
@@ -169,58 +157,32 @@ class Renderer:
             def calc_blend_ratio(from_num: int, to_num: int, curr_num: int) -> float:
                 if (to_num - from_num) == 0: return 0  # we don't really know if it is between [0-1]
                 return (curr_num - from_num)/(to_num - from_num)
+            def interpolate_blend(from_num: int, to_num: int, original_from: int, original_to: int, current_num: int, flip=False) -> int:
+                return interpolate_int(from_num, to_num, calc_blend_ratio(original_from, original_to, current_num))
             
             
-            # do math to calculate from and to
-            # TODO: all triangles but 3/4 of acute angles are working
-            if (y < first_point[1]) ^ (middle_point[1] > last_point[1]):  # where ^ is XOR
-                if (first_point[1] - middle_point[1]) == 0:
-                    from_x = first_point[0]
-                else:
-                    blend_ratio = calc_blend_ratio(middle_point[1], first_point[1], y)
-                    from_x = interpolate_int(middle_point[0], first_point[0], blend_ratio)
-                    # from_x = -((y - smallest_y) / (first_point[1] - middle_point[1])) * (middle_point[0] - first_point[0]) + middle_point[0]
+            # Now we interpolate
+            if y < points_y[1][1]:
+                xa = interpolate_blend(points_y[0][0], points_y[2][0], points_y[0][1], points_y[2][1], y)  # from smallest y to largest y
+                xb = interpolate_blend(points_y[0][0], points_y[1][0], points_y[0][1], points_y[1][1], y)  # from small y to middle y
             else:
-                if (last_point[1] - first_point[1]) == 0:
-                    from_x = first_point[0]
-                else:
-                    blend_ratio = calc_blend_ratio(first_point[1], last_point[1], y)
-                    from_x = interpolate_int(first_point[0], last_point[0], blend_ratio)
-                    # from_x = ((y - first_point[1]) / (last_point[1] - first_point[1])) * (last_point[0] - first_point[0]) + first_point[0]
+                xa = interpolate_blend(points_y[0][0], points_y[2][0], points_y[0][1], points_y[2][1], y)  # from smallest y to largest y
+                xb = interpolate_blend(points_y[1][0], points_y[2][0], points_y[1][1], points_y[2][1], y)  # from middle y to large y
             
-            if (y < last_point[1]) ^ (middle_point[1] > last_point[1]):  # where ^ is XOR
-                if (last_point[1] - middle_point[1]) == 0:
-                    to_x = middle_point[0]
-                else:
-                    blend_ratio = calc_blend_ratio(middle_point[1], last_point[1], y)
-                    to_x = interpolate_int(middle_point[0], last_point[0], blend_ratio)
-                    # to_x = ((y - smallest_y) / (last_point[1] - middle_point[1])) * (last_point[0] - middle_point[0]) + middle_point[0]
-            else:
-                if (first_point[1] - last_point[1]) == 0:
-                    to_x = first_point[0]
-                else:
-                    blend_ratio = calc_blend_ratio(last_point[1], first_point[1], y)
-                    to_x = interpolate_int(first_point[0], last_point[0], blend_ratio, flip=(first_point[1]<last_point[1])^(middle_point[1] < last_point[1]))
-                    # to_x = ((y - last_point[1]) / (first_point[1] - last_point[1])) * (first_point[0] - last_point[0]) + last_point[0]
-            
-            
-            
+            # get start x and end x to draw to
+            from_x = min(xa, xb)
+            to_x = max(xa, xb)
             
             # draw the row
             for x in range(int(from_x), int(to_x)):
                 if self._is_bounded((x,y)):
                     self.rgb_buffer[y][x] = color
-        
-        
+
             # debug draw points
-            for p in points:
+            for p in points_y:
                 if self._is_bounded((p[0],p[1])):
                     self.rgb_buffer[p[1]][p[0]] = COLOR_PINK
-        
-        
-        
-        
-        
+
 
         # Barycentric coordinate method to fill the triangle
         # def edge(p1, p2, p):
