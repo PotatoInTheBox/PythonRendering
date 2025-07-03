@@ -22,6 +22,9 @@ PIXEL_BORDER_SIZE = 1  # Size of the pixel border
 
 angle = 0
 
+mouse_x = 0
+mouse_y = 0
+
 from typing import List, Tuple
 COLOR_BLACK = (0, 0, 0)
 COLOR_RED = (255, 0, 0)
@@ -61,6 +64,9 @@ def timed(name="", n=60):
             return result
         return inner
     return wrapper
+
+def normalize(v):
+    return v / (np.linalg.norm(v) + 1e-16)
 
 class Renderer:
     def __init__(self, width: int = 700, height: int = 700, grid_size: int = 100) -> None:
@@ -254,10 +260,63 @@ class Renderer:
         for tri in self.triangle_buffer:
             self.fill_triangle(tri[0], tri[1], tri[2], COLOR_GREEN)
         
+    def draw_polygons(self):
+        # Hardcoded upside-down isosceles triangle in 3D
+        # Top two points are farther (larger z), bottom is closer (smaller z)
+        # triangle = [
+        #     [40, 20, 2.0],  # top-left (far)
+        #     [60, 20, 2.0],  # top-right (far)
+        #     [50, 40, 0.5],  # bottom (close)
+        # ]
+        global mouse_x
+        global mouse_y
+        triangle = [
+            [40, 20, 2.0],  # top-left (far)
+            [60, 20, 2.0],  # top-right (far)
+            [mouse_x, mouse_y, 0.5],  # bottom (close)
+        ]
         
+
+        # Placeholder: just draw a 2D projection for now
+        # We'll handle shading and projection later
+        p1 = (int(triangle[0][0]), int(triangle[0][1]))
+        p2 = (int(triangle[1][0]), int(triangle[1][1]))
+        p3 = (int(triangle[2][0]), int(triangle[2][1]))
         
+        # I can reuse the same trick to figure out how shaded it is.
+        # right now it is in 3d space. If I have a light source (say (0,-1,0) where -1 is up)
+        # then, I can use the dot product to see how much the triangle face is pointing towards it.
+        # However, this means I must get the face of the triangle (the direction). 
+        # If I use the cross product on two points then I will get a direction vector.
+        # I can then use this direction vector to do a dot product calculation with the light vector.
         
-        pass
+        # I'll do the dot product and cross product myself for practice.
+        # Sike, I realized as I was doing the cross product that this is something I do not want to
+        # do by hand or even type it in each time. I'd rather just tell a helper function to do a cross
+        # product between two matricies.
+        
+        # Get the triangle face vector (eg. by doing a cross product of b and c while offsetting by a)
+        a = np.subtract(triangle[1], triangle[0])
+        b = np.subtract(triangle[2], triangle[0])
+        triangle_face = normalize(np.cross(a, b))
+        # It would be nice if i normalized it. This can be done by dividing all the numbers by the pythagoreas of all of them
+        
+        # Get the light source vector (given) inverted because my triangle is
+        light = [0,1,0]
+        
+        # Get the dot product between the two (fairly simple)
+        light_amount = np.dot(triangle_face, light)
+        
+        # dot product will give me a number between negative 1 and positive 1
+        light_amount = (light_amount + 1)/2
+        
+        # cap it
+        brightness = max(0, light_amount)
+        
+        # Apply the dot product to a whiteness level
+        color = tuple(int(brightness * c) for c in COLOR_WHITE)
+        self.fill_triangle(p1, p2, p3, color)
+
     @timed("render_buffer")
     def render_buffer(self):
         surface = pygame.surfarray.make_surface(self.rgb_buffer.swapaxes(0, 1))
@@ -290,7 +349,8 @@ class Renderer:
                 self.draw_square((10,10), 5, COLOR_WHITE)
                 self.draw_circle((20, 8), 8, COLOR_GREEN)
                 self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
-                self.draw_polygons_2d()
+                # self.draw_polygons_2d()
+                self.draw_polygons()
                 
                 # Spinning line (10px long from center)
                 cx, cy = self.grid_size // 2, self.grid_size // 2
@@ -313,25 +373,31 @@ class Renderer:
                     self.active_point = 0
 
                 mx, my = pygame.mouse.get_pos()
+                
                 mx //= self.cell_size
                 my //= self.cell_size
 
+                global mouse_x
+                mouse_x = mx
+                global mouse_y
+                mouse_y = my
+                
                 # Move the active point to mouse position
-                self.poly_points[self.active_point][0] = mx
-                self.poly_points[self.active_point][1] = my
+                # self.poly_points[self.active_point][0] = mx
+                # self.poly_points[self.active_point][1] = my
 
-                # Draw the polygon
-                self.fill_triangle(
-                    (self.poly_points[0][0], self.poly_points[0][1]),
-                    (self.poly_points[1][0], self.poly_points[1][1]),
-                    (self.poly_points[2][0], self.poly_points[2][1]),
-                    COLOR_WHITE
-                )
+                # # Draw the polygon
+                # self.fill_triangle(
+                #     (self.poly_points[0][0], self.poly_points[0][1]),
+                #     (self.poly_points[1][0], self.poly_points[1][1]),
+                #     (self.poly_points[2][0], self.poly_points[2][1]),
+                #     COLOR_WHITE
+                # )
 
-                # Draw points for visual feedback
-                for idx, pt in enumerate(self.poly_points):
-                    color = COLOR_RED if idx == self.active_point else COLOR_BLUE
-                    self.draw_square((pt[0], pt[1]), 2, color)
+                # # Draw points for visual feedback
+                # for idx, pt in enumerate(self.poly_points):
+                #     color = COLOR_RED if idx == self.active_point else COLOR_BLUE
+                #     self.draw_square((pt[0], pt[1]), 2, color)
 
                 # Handle mouse click to cycle active point
                 for event in pygame.event.get():
@@ -339,7 +405,7 @@ class Renderer:
                         self.running = False
                     elif event.type == pygame.MOUSEBUTTONDOWN:
                         if event.button == 1:  # Left click
-                            self.active_point = (self.active_point + 1) % 3
+                            # self.active_point = (self.active_point + 1) % 3
                             print(self.poly_points)
             
             
