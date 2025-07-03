@@ -63,7 +63,7 @@ def timed(name="", n=60):
     return wrapper
 
 class Renderer:
-    def __init__(self, width: int = 2000, height: int = 2000, grid_size: int = 500) -> None:
+    def __init__(self, width: int = 700, height: int = 700, grid_size: int = 100) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -76,7 +76,21 @@ class Renderer:
         # Initialize 2D RGB buffer
         self.rgb_buffer = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
         # Initialize 2D polygon buffer
-        self.polygons_2d = []
+        self.triangle_buffer = [
+            [(12, 14), (18, 22), (15, 30)],
+            [(20, 20), (30, 25), (25, 35)],
+            [(40, 15), (45, 28), (35, 33)],
+            [(60, 40), (70, 45), (65, 55)],
+            [(50, 60), (55, 65), (45, 70)],
+            [(30, 50), (35, 60), (25, 65)],
+            [(80, 20), (85, 30), (75, 35)],
+            [(15, 75), (20, 85), (10, 90)],
+            [(70, 70), (80, 75), (75, 85)],
+            [(90, 10), (95, 20), (85, 25)],
+            [(65, 25), (70, 30), (60, 35)],
+            [(22, 40), (28, 45), (24, 50)],
+        ]
+
         
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
@@ -208,6 +222,8 @@ class Renderer:
         # TODO do a performance test (seems like fun)
         # I'll probably want to start putting profilers in place
         # Barycentric coordinate method to fill the triangle
+        # Right now this method is less effective because we have to go over more pixels with large triangles
+        # This becomes a better algorithm with smaller triangles.
         # min_x = max(min(p1[0], p2[0], p3[0]), 0)
         # max_x = min(max(p1[0], p2[0], p3[0]), self.grid_size - 1)
         # min_y = max(min(p1[1], p2[1], p3[1]), 0)
@@ -235,7 +251,8 @@ class Renderer:
         # So what we are going to do is draw polygons from a buffer/list containing polygons.
         # We want to scan every single pixel and draw if a polygon intersects.
         # Initially, it will be a 2d implementation, then it will move to 3d.
-        
+        for tri in self.triangle_buffer:
+            self.fill_triangle(tri[0], tri[1], tri[2], COLOR_GREEN)
         
         
         
@@ -273,6 +290,7 @@ class Renderer:
                 self.draw_square((10,10), 5, COLOR_WHITE)
                 self.draw_circle((20, 8), 8, COLOR_GREEN)
                 self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
+                self.draw_polygons_2d()
                 
                 # Spinning line (10px long from center)
                 cx, cy = self.grid_size // 2, self.grid_size // 2
