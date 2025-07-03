@@ -30,6 +30,22 @@ COLOR_WHITE = (255, 255, 255)
 COLOR_DARK_GRAY = (50, 50, 50)
 COLOR_PINK = (255, 105, 180)
 
+FRAME_LOG_INTERVAL = 60  # log once per 60 frames
+frame_count = 0
+
+def timed(name="", n=60):
+    def wrapper(fn):
+        def inner(*args, **kwargs):
+            global frame_count
+            result = fn(*args, **kwargs)
+            if frame_count % n == 0:
+                start = time.perf_counter()
+                fn(*args, **kwargs)
+                print(f"{name or fn.__name__}: {(time.perf_counter() - start) * 1000:.2f}ms")
+            return result
+        return inner
+    return wrapper
+
 class Renderer:
     def __init__(self, width: int = 700, height: int = 700, grid_size: int = 100) -> None:
         pygame.init()
@@ -141,68 +157,55 @@ class Renderer:
             for x in range(center[0] - radius, center[0] + radius):
                 if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
                     self.rgb_buffer[y][x] = color
-    
+
+    @timed("draw_line")
     def fill_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
         
-        # # Sort the points by their x-coordinate (ascending)
-        # points_y = sorted([p1, p2, p3], key=lambda p: p[1])
-        
-        # for y in range(points_y[0][1], points_y[2][1] + 1):
-        #     from_x = 0
-        #     to_x = 0
-            
-        #     def interpolate_int(from_num: int, to_num: int, blend_ratio: float, flip=False) -> int:
-        #         if flip: return int(to_num - ((to_num - from_num)*blend_ratio))
-        #         return int(from_num + ((to_num - from_num)*blend_ratio))
-        #     def calc_blend_ratio(from_num: int, to_num: int, curr_num: int) -> float:
-        #         if (to_num - from_num) == 0: return 0  # we don't really know if it is between [0-1]
-        #         return (curr_num - from_num)/(to_num - from_num)
-        #     def interpolate_blend(from_num: int, to_num: int, original_from: int, original_to: int, current_num: int, flip=False) -> int:
-        #         return interpolate_int(from_num, to_num, calc_blend_ratio(original_from, original_to, current_num))
-            
-            
-        #     # Now we interpolate
-        #     if y < points_y[1][1]:
-        #         xa = interpolate_blend(points_y[0][0], points_y[2][0], points_y[0][1], points_y[2][1], y)  # from smallest y to largest y
-        #         xb = interpolate_blend(points_y[0][0], points_y[1][0], points_y[0][1], points_y[1][1], y)  # from small y to middle y
-        #     else:
-        #         xa = interpolate_blend(points_y[0][0], points_y[2][0], points_y[0][1], points_y[2][1], y)  # from smallest y to largest y
-        #         xb = interpolate_blend(points_y[1][0], points_y[2][0], points_y[1][1], points_y[2][1], y)  # from middle y to large y
-            
-        #     # get start x and end x to draw to
-        #     from_x = min(xa, xb)
-        #     to_x = max(xa, xb)
-            
-        #     # draw the row
-        #     for x in range(int(from_x), int(to_x)):
-        #         if self._is_bounded((x,y)):
-        #             self.rgb_buffer[y][x] = color
+        p0, p1, p2 = sorted([p1, p2, p3], key=lambda p: p[1])
+        x0, y0 = p0
+        x1, y1 = p1
+        x2, y2 = p2
 
-        #     # debug draw points
-        #     for p in points_y:
-        #         if self._is_bounded((p[0],p[1])):
-        #             self.rgb_buffer[p[1]][p[0]] = COLOR_PINK
+        for y in range(y0, y2 + 1):
+            if y2 != y0:
+                xa = int(x0 + (x2 - x0) * ((y - y0) / (y2 - y0)))
+            else:
+                xa = x0
+
+            if y < y1 and y1 != y0:
+                xb = int(x0 + (x1 - x0) * ((y - y0) / (y1 - y0)))
+            elif y >= y1 and y2 != y1:
+                xb = int(x1 + (x2 - x1) * ((y - y1) / (y2 - y1)))
+            else:
+                xb = x1
+
+            from_x = min(xa, xb)
+            to_x = max(xa, xb)
+
+            for x in range(from_x, to_x):
+                if 0 <= x < self.grid_size and 0 <= y < self.grid_size:  # inlined bounds check
+                    self.rgb_buffer[y][x] = color
+
 
         # TODO do a performance test (seems like fun)
         # I'll probably want to start putting profilers in place
         # Barycentric coordinate method to fill the triangle
-        points_x = sorted([p1, p2, p3], key=lambda p: p[0])
-        points_y = sorted([p1, p2, p3], key=lambda p: p[1])
-        
-        def edge(p1, p2, p):
-            return (p[0] - p1[0]) * (p2[1] - p1[1]) - (p[1] - p1[1]) * (p2[0] - p1[0])
+        # min_x = max(min(p1[0], p2[0], p3[0]), 0)
+        # max_x = min(max(p1[0], p2[0], p3[0]), self.grid_size - 1)
+        # min_y = max(min(p1[1], p2[1], p3[1]), 0)
+        # max_y = min(max(p1[1], p2[1], p3[1]), self.grid_size - 1)
 
-        for y in range(points_y[0][1], points_y[2][1] + 1):
-            for x in range(points_x[0][0], points_x[2][0] + 1):
-                p = (x, y)
-                w0 = edge(p2, p3, p)
-                w1 = edge(p3, p1, p)
-                w2 = edge(p1, p2, p)
-                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    if self._is_bounded(p):
-                        self.rgb_buffer[y][x] = color
+        # for y in range(min_y, max_y + 1):
+        #     for x in range(min_x, max_x + 1):
+        #         # Inline edge functions
+        #         w0 = (x - p2[0]) * (p3[1] - p2[1]) - (y - p2[1]) * (p3[0] - p2[0])
+        #         w1 = (x - p3[0]) * (p1[1] - p3[1]) - (y - p3[1]) * (p1[0] - p3[0])
+        #         w2 = (x - p1[0]) * (p2[1] - p1[1]) - (y - p1[1]) * (p2[0] - p1[0])
+
+        #         if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+        #             self.rgb_buffer[y][x] = color
 
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
         if PASSTHROUGH:
@@ -241,6 +244,8 @@ class Renderer:
     def run(self):
         
         while self.running:
+            global frame_count
+            frame_count += 1  # start of the next frame
             self.screen.fill((0, 0, 0))
 
             # Drawing demo here
