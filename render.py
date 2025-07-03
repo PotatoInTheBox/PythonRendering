@@ -11,6 +11,7 @@ import math
 import time
 import sys
 import ctypes
+import numpy as np
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
     ctypes.windll.user32.SetProcessDPIAware()
@@ -32,6 +33,21 @@ COLOR_PINK = (255, 105, 180)
 
 FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 frame_count = 0
+_profile_timers = {}
+
+def profile_start(name: str, n=60):
+    global frame_count
+    if frame_count % n == 0:
+        _profile_timers[name] = time.perf_counter()
+
+def profile_end(name: str, n=60):
+    global frame_count
+    if frame_count % n == 0:
+        if name in _profile_timers:
+            elapsed = (time.perf_counter() - _profile_timers.pop(name)) * 1000
+            print(f"{name}: {elapsed:.3f}ms")
+        else:
+            print(f"Warning: profile_end called for '{name}' without matching profile_start")
 
 def timed(name="", n=60):
     def wrapper(fn):
@@ -41,13 +57,13 @@ def timed(name="", n=60):
             if frame_count % n == 0:
                 start = time.perf_counter()
                 fn(*args, **kwargs)
-                print(f"{name or fn.__name__}: {(time.perf_counter() - start) * 1000:.2f}ms")
+                print(f"{name or fn.__name__}: {(time.perf_counter() - start) * 1000:.3f}ms")
             return result
         return inner
     return wrapper
 
 class Renderer:
-    def __init__(self, width: int = 700, height: int = 700, grid_size: int = 100) -> None:
+    def __init__(self, width: int = 2000, height: int = 2000, grid_size: int = 500) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -58,7 +74,7 @@ class Renderer:
         self.running = True
 
         # Initialize 2D RGB buffer
-        self.rgb_buffer = [[(0, 0, 0) for _ in range(grid_size)] for _ in range(grid_size)]
+        self.rgb_buffer = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
         # Initialize 2D polygon buffer
         self.polygons_2d = []
         
@@ -181,12 +197,12 @@ class Renderer:
             else:
                 xb = x1
 
-            from_x = min(xa, xb)
-            to_x = max(xa, xb)
-
-            for x in range(from_x, to_x):
-                if 0 <= x < self.grid_size and 0 <= y < self.grid_size:  # inlined bounds check
-                    self.rgb_buffer[y][x] = color
+            from_x = max(min(xa, xb), 0)
+            to_x = min(max(xa, xb), self.grid_size - 1)
+            # profile_start("draw_triangle row")
+            if 0 <= y < self.grid_size and from_x <= to_x:
+                self.rgb_buffer[y, from_x:to_x+1] = color
+            # profile_end("draw_triangle row")
 
 
         # TODO do a performance test (seems like fun)
@@ -225,19 +241,16 @@ class Renderer:
         
         
         pass
-
+    @timed("render_buffer")
     def render_buffer(self):
-        for y in range(self.grid_size):
-            for x in range(self.grid_size):
-                color = self.rgb_buffer[y][x]
-                rect = pygame.Rect(x * self.cell_size, y * self.cell_size, self.cell_size, self.cell_size)
-                pygame.draw.rect(self.screen, color, rect)
+        surface = pygame.surfarray.make_surface(self.rgb_buffer.swapaxes(0, 1))
+        surface = pygame.transform.scale(surface, (self.width, self.height))
+        self.screen.blit(surface, (0, 0))
+
         if DRAW_PIXEL_BORDER:
             pixel_border_color = COLOR_DARK_GRAY
             for x in range(self.grid_size):
-                # Draw all the vertical lines
                 pygame.draw.line(self.screen, pixel_border_color, (x * self.cell_size, 0), (x * self.cell_size, self.height), PIXEL_BORDER_SIZE)
-            # Draw all the horizontal lines
             for y in range(self.grid_size):
                 pygame.draw.line(self.screen, pixel_border_color, (0, y * self.cell_size), (self.width, y * self.cell_size), PIXEL_BORDER_SIZE)
 
@@ -303,12 +316,13 @@ class Renderer:
                     self.draw_square((pt[0], pt[1]), 2, color)
 
                 # Handle mouse click to cycle active point
-                for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
-                    if event.button == 1:  # Left click
-                        self.active_point = (self.active_point + 1) % 3
-                        print(self.poly_points)
+                for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         self.running = False
+                    elif event.type == pygame.MOUSEBUTTONDOWN:
+                        if event.button == 1:  # Left click
+                            self.active_point = (self.active_point + 1) % 3
+                            print(self.poly_points)
             
             
 
@@ -316,15 +330,11 @@ class Renderer:
                 self.render_buffer()
             
             # Clear the RGB buffer for the next frame
-            self.rgb_buffer = [[(0, 0, 0) for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+            self.rgb_buffer.fill(0)
                 
 
             pygame.display.flip()
             self.clock.tick(60)
-
-            # for event in pygame.event.get():
-            #     if event.type == pygame.QUIT:
-            #         self.running = False
 
         pygame.quit()
 
