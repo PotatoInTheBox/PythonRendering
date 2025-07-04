@@ -65,11 +65,28 @@ def timed(name="", n=60):
         return inner
     return wrapper
 
+def load_obj(filepath):
+    vertices = []
+    triangles = []
+
+    with open(filepath) as file:
+        for line in file:
+            if line.startswith('#') or not line.strip():
+                continue
+            parts = line.strip().split()
+            if parts[0] == 'v':
+                vertices.append(tuple(map(float, parts[1:4])))
+            elif parts[0] == 'f':
+                face = [int(p.split('/')[0]) - 1 for p in parts[1:4]]
+                triangles.append(tuple(face))
+
+    return vertices, triangles
+
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
 
 class Renderer:
-    def __init__(self, width: int = 700, height: int = 700, grid_size: int = 100) -> None:
+    def __init__(self, width: int = 800, height: int = 800, grid_size: int = 200) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -81,6 +98,7 @@ class Renderer:
 
         # Initialize 2D RGB buffer
         self.rgb_buffer = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
+        self.z_buffer = np.full((self.grid_size, self.grid_size), np.inf, dtype=np.float32)
         # Initialize 2D polygon buffer
         self.triangle_buffer = [
             [(12, 14), (18, 22), (15, 30)],
@@ -96,6 +114,9 @@ class Renderer:
             [(65, 25), (70, 30), (60, 35)],
             [(22, 40), (28, 45), (24, 50)],
         ]
+        
+        utah_teapot = load_obj("./models/ship.obj")
+        self.object = utah_teapot
 
         
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
@@ -195,25 +216,25 @@ class Renderer:
                     self.rgb_buffer[y][x] = color
 
     # 500x500 triangles cost 0.8ms to draw (not great)
-    def fill_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED):
+    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
         
         p0, p1, p2 = sorted([p1, p2, p3], key=lambda p: p[1])
-        x0, y0 = p0
-        x1, y1 = p1
-        x2, y2 = p2
+        x0, y0, z0 = p0
+        x1, y1, z1 = p1
+        x2, y2, z2 = p2
 
-        for y in range(y0, y2 + 1):
+        for y in range(int(y0), int(y2 + 1)):
             if y2 != y0:
-                xa = int(x0 + (x2 - x0) * ((y - y0) / (y2 - y0)))
+                xa = x0 + (x2 - x0) * ((y - y0) / (y2 - y0))
             else:
                 xa = x0
 
             if y < y1 and y1 != y0:
-                xb = int(x0 + (x1 - x0) * ((y - y0) / (y1 - y0)))
+                xb = x0 + (x1 - x0) * ((y - y0) / (y1 - y0))
             elif y >= y1 and y2 != y1:
-                xb = int(x1 + (x2 - x1) * ((y - y1) / (y2 - y1)))
+                xb = x1 + (x2 - x1) * ((y - y1) / (y2 - y1))
             else:
                 xb = x1
 
@@ -221,7 +242,7 @@ class Renderer:
             to_x = min(max(xa, xb), self.grid_size - 1)
             # profile_start("draw_triangle row")
             if 0 <= y < self.grid_size and from_x <= to_x:
-                self.rgb_buffer[y, from_x:to_x+1] = color
+                self.rgb_buffer[y, int(from_x):int(to_x+1)] = color
             # profile_end("draw_triangle row")
 
 
@@ -252,15 +273,8 @@ class Renderer:
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
-    
-    def draw_polygons_2d(self):
-        # So what we are going to do is draw polygons from a buffer/list containing polygons.
-        # We want to scan every single pixel and draw if a polygon intersects.
-        # Initially, it will be a 2d implementation, then it will move to 3d.
-        for tri in self.triangle_buffer:
-            self.fill_triangle(tri[0], tri[1], tri[2], COLOR_GREEN)
         
-    def draw_polygons(self):
+    def draw_polygons(self, scale=1, offset=(0,0)):
         # Hardcoded upside-down isosceles triangle in 3D
         # Top two points are farther (larger z), bottom is closer (smaller z)
         # triangle = [
@@ -302,20 +316,69 @@ class Renderer:
         # It would be nice if i normalized it. This can be done by dividing all the numbers by the pythagoreas of all of them
         
         # Get the light source vector (given) inverted because my triangle is
-        light = [0,1,0]
+        light = [0,-1,0]
+        
+        # Get the camera direction (towards negative z)
+        camera_direction = [0,0,-1]
         
         # Get the dot product between the two (fairly simple)
         light_amount = np.dot(triangle_face, light)
         
-        # dot product will give me a number between negative 1 and positive 1
-        light_amount = (light_amount + 1)/2
-        
         # cap it
-        brightness = max(0, light_amount)
+        brightness = max(0, (light_amount + 1) / 2)
         
         # Apply the dot product to a whiteness level
         color = tuple(int(brightness * c) for c in COLOR_WHITE)
-        self.fill_triangle(p1, p2, p3, color)
+        color = (color[0], color[1], color[2])  # make it more explicit
+        # self.fill_triangle(p1, p2, p3, color)
+        
+        def rotation_matrix_x(theta):
+            c, s = np.cos(theta), np.sin(theta)
+            return np.array([
+                [1, 0, 0],
+                [0, c, -s],
+                [0, s, c]
+            ])
+
+        def rotation_matrix_y(theta):
+            c, s = np.cos(theta), np.sin(theta)
+            return np.array([
+                [ c, 0, s],
+                [ 0, 1, 0],
+                [-s, 0, c]
+            ])
+
+        global angle
+        Rx = rotation_matrix_x(angle)
+        Ry = rotation_matrix_y(angle)
+        R = Ry @ Rx  # first rotate X, then Y
+        # R = Ry
+        angle += 0.01
+        
+        for face_index in self.object[1]:
+            tri = tuple(
+                R @ np.array(self.object[0][i])
+                for i in face_index
+            )
+            tri = tuple(
+                [v[0] * scale + offset[0], v[1] * scale + offset[1], v[2] * scale]
+                for v in tri
+            )
+            a = np.subtract(tri[1], tri[0])
+            b = np.subtract(tri[2], tri[0])
+            triangle_face = normalize(np.cross(a, b))
+            light_amount = np.dot(triangle_face, light)
+            # use the triangle face to cull if it isn't facing the camera
+            triangle_facing_camera = np.dot(triangle_face, camera_direction)
+            if triangle_facing_camera > 0:  # I have no clue if it should be negative or positive
+                continue
+            brightness = max(0, (light_amount + 1) / 2)
+            color = tuple(int(brightness * c) for c in COLOR_WHITE)
+            color = (color[0], color[1], color[2])  # make it more explicit
+            # 
+            # We project it (which we will simply assume it's already projected)
+            self.fill_triangle(tri[0], tri[1], tri[2], color) # type: ignore
+            
 
     @timed("render_buffer")
     def render_buffer(self):
@@ -341,26 +404,26 @@ class Renderer:
             if True:
                 # self.draw_line((0, 0), (self.width, self.height), (255, 0, 0))
                 # self.draw_square((50, 50), 100, (0, 255, 0))
-                self.draw_pixel((0, 0), COLOR_RED)
-                self.draw_pixel((1, 1), COLOR_BLUE)
-                self.draw_pixel((1, 0), COLOR_GREEN)
-                self.draw_line((6, 6), (11, 8), COLOR_GREEN)
-                self.draw_line((2, 2), (5, 5), COLOR_WHITE)
-                self.draw_square((10,10), 5, COLOR_WHITE)
-                self.draw_circle((20, 8), 8, COLOR_GREEN)
-                self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
+                # self.draw_pixel((0, 0), COLOR_RED)
+                # self.draw_pixel((1, 1), COLOR_BLUE)
+                # self.draw_pixel((1, 0), COLOR_GREEN)
+                # self.draw_line((6, 6), (11, 8), COLOR_GREEN)
+                # self.draw_line((2, 2), (5, 5), COLOR_WHITE)
+                # self.draw_square((10,10), 5, COLOR_WHITE)
+                # self.draw_circle((20, 8), 8, COLOR_GREEN)
+                # self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
                 # self.draw_polygons_2d()
-                self.draw_polygons()
+                self.draw_polygons(scale=20, offset=(100,100))
                 
                 # Spinning line (10px long from center)
-                cx, cy = self.grid_size // 2, self.grid_size // 2
-                length = 20
-                global angle
-                x2 = int(cx + length * math.cos(angle))
-                y2 = int(cy + length * math.sin(angle))
-                self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
+                # cx, cy = self.grid_size // 2, self.grid_size // 2
+                # length = 20
+                # global angle
+                # x2 = int(cx + length * math.cos(angle))
+                # y2 = int(cy + length * math.sin(angle))
+                # self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
                 
-                angle += 0.01
+                # angle += 0.01
                 
                 # Polygon follows mouse, left click cycles which point is moved
                 if not hasattr(self, "poly_points"):
@@ -407,15 +470,13 @@ class Renderer:
                         if event.button == 1:  # Left click
                             # self.active_point = (self.active_point + 1) % 3
                             print(self.poly_points)
-            
-            
 
             if not PASSTHROUGH:
                 self.render_buffer()
             
             # Clear the RGB buffer for the next frame
             self.rgb_buffer.fill(0)
-                
+            self.z_buffer.fill(0.0)
 
             pygame.display.flip()
             self.clock.tick(60)
