@@ -35,8 +35,8 @@ COLOR_DARK_GRAY = (50, 50, 50)
 COLOR_PINK = (255, 105, 180)
 
 FRAME_LOG_INTERVAL = 60  # log once per 60 frames
-frame_count = 0
-_profile_timers = {}
+frame_count = 0  # count frames rendered so far
+_profile_timers = {}  # keep track of our named profilers
 
 def profile_start(name: str, n=60):
     global frame_count
@@ -194,7 +194,7 @@ class Renderer:
                 if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
                     self.rgb_buffer[y][x] = color
 
-    @timed("draw_line")
+    # 500x500 triangles cost 0.8ms to draw (not great)
     def fill_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
