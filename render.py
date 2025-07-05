@@ -222,81 +222,41 @@ class Renderer:
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
+
+        min_x = int(max(min(p1[0], p2[0], p3[0]), 0))
+        max_x = int(min(max(p1[0], p2[0], p3[0]), self.grid_size - 1))
+        min_y = int(max(min(p1[1], p2[1], p3[1]), 0))
+        max_y = int(min(max(p1[1], p2[1], p3[1]), self.grid_size - 1))
         
-        # p0, p1, p2 = sorted([p1, p2, p3], key=lambda p: p[1])
-        # x0, y0, z0 = p0
-        # x1, y1, z1 = p1
-        # x2, y2, z2 = p2
+        # Compute edge coefficients for: E(x, y) = A*x + B*y + C
+        def edge_coeffs(p1, p2):
+            A = p1[1] - p2[1]
+            B = p2[0] - p1[0]
+            C = p1[0]*p2[1] - p1[1]*p2[0]
+            return A, B, C
 
-        # for y in range(int(y0), int(y2 + 1)):
-        #     if y2 != y0:
-        #         xa = x0 + (x2 - x0) * ((y - y0) / (y2 - y0))
-        #     else:
-        #         xa = x0
+        A0, B0, C0 = edge_coeffs(p2, p3)
+        A1, B1, C1 = edge_coeffs(p3, p1)
+        A2, B2, C2 = edge_coeffs(p1, p2)
 
-        #     if y < y1 and y1 != y0:
-        #         xb = x0 + (x1 - x0) * ((y - y0) / (y1 - y0))
-        #     elif y >= y1 and y2 != y1:
-        #         xb = x1 + (x2 - x1) * ((y - y1) / (y2 - y1))
-        #     else:
-        #         xb = x1
+        for y in range(min_y, max_y + 1):
+            # Start x from min_x
+            w0 = A0 * min_x + B0 * y + C0
+            w1 = A1 * min_x + B1 * y + C1
+            w2 = A2 * min_x + B2 * y + C2
 
-        #     from_x = max(min(xa, xb), 0)
-        #     to_x = min(max(xa, xb), self.grid_size - 1)
-        #     # profile_start("draw_triangle row")
-        #     if 0 <= y < self.grid_size and from_x <= to_x:
-        #         self.rgb_buffer[y, int(from_x):int(to_x+1)] = color
-                
-        #     # profile_end("draw_triangle row")
+            # Precompute deltas
+            dw0_dx = A0
+            dw1_dx = A1
+            dw2_dx = A2
 
-
-        # TODO do a performance test (seems like fun)
-        # I'll probably want to start putting profilers in place
-        # Barycentric coordinate method to fill the triangle
-        # Right now this method is less effective because we have to go over more pixels with large triangles
-        # This becomes a better algorithm with smaller triangles.
-        min_x = max(min(p1[0], p2[0], p3[0]), 0)
-        max_x = min(max(p1[0], p2[0], p3[0]), self.grid_size - 1)
-        min_y = max(min(p1[1], p2[1], p3[1]), 0)
-        max_y = min(max(p1[1], p2[1], p3[1]), self.grid_size - 1)
-        
-        # Precompute stuff for:
-        # edge(p1, p2, p) = (p.x - p1.x) * (p2.y - p1.y) - (p.y - p1.y) * (p2.x - p1.x)
-        A1 = (p3[1] - p2[1])
-        A2 = (p3[0] - p2[0])
-        B1 = (p1[1] - p3[1])
-        B2 = (p1[0] - p3[0])
-        C1 = (p2[1] - p1[1])
-        C2 = (p2[0] - p1[0])
-        
-
-        for y in range(int(min_y), int(max_y + 1)):
-            X = (y - p2[1]) * A2
-            Y = (y - p3[1]) * B2
-            Z = (y - p1[1]) * C2
-            
-            w0 = (min_x - p2[0]) * A1 - X
-            w1 = (min_x - p3[0]) * B1 - Y
-            w2 = (min_x - p1[0]) * C1 - Z
-            
-            # Instead of multiplying, we can add by a delta (we will always increment
-            # x by exactly one)
-            dw0_dx = A1
-            dw1_dx = B1
-            dw2_dx = C1
-            
-            for x in range(int(min_x), int(max_x + 1)):
-                # Inline edge functions
-                # w0 = (x - p2[0]) * A1 - X
-                # w1 = (x - p3[0]) * B1 - Y
-                # w2 = (x - p1[0]) * C1 - Z
-
+            for x in range(min_x, max_x + 1):
                 if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    self.rgb_buffer[y][x] = color
-                    pass
+                    self.rgb_buffer[y, x] = color
                 w0 += dw0_dx
                 w1 += dw1_dx
                 w2 += dw2_dx
+
 
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
         if PASSTHROUGH:
