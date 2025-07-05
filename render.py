@@ -117,6 +117,9 @@ class Renderer:
         
         utah_teapot = load_obj("./models/ship.obj")
         self.object = utah_teapot
+        
+        self.camera_pos = [0.0,0.0,0.0]
+        self.camera_speed = 1.0
 
         
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
@@ -220,30 +223,31 @@ class Renderer:
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
         
-        p0, p1, p2 = sorted([p1, p2, p3], key=lambda p: p[1])
-        x0, y0, z0 = p0
-        x1, y1, z1 = p1
-        x2, y2, z2 = p2
+        # p0, p1, p2 = sorted([p1, p2, p3], key=lambda p: p[1])
+        # x0, y0, z0 = p0
+        # x1, y1, z1 = p1
+        # x2, y2, z2 = p2
 
-        for y in range(int(y0), int(y2 + 1)):
-            if y2 != y0:
-                xa = x0 + (x2 - x0) * ((y - y0) / (y2 - y0))
-            else:
-                xa = x0
+        # for y in range(int(y0), int(y2 + 1)):
+        #     if y2 != y0:
+        #         xa = x0 + (x2 - x0) * ((y - y0) / (y2 - y0))
+        #     else:
+        #         xa = x0
 
-            if y < y1 and y1 != y0:
-                xb = x0 + (x1 - x0) * ((y - y0) / (y1 - y0))
-            elif y >= y1 and y2 != y1:
-                xb = x1 + (x2 - x1) * ((y - y1) / (y2 - y1))
-            else:
-                xb = x1
+        #     if y < y1 and y1 != y0:
+        #         xb = x0 + (x1 - x0) * ((y - y0) / (y1 - y0))
+        #     elif y >= y1 and y2 != y1:
+        #         xb = x1 + (x2 - x1) * ((y - y1) / (y2 - y1))
+        #     else:
+        #         xb = x1
 
-            from_x = max(min(xa, xb), 0)
-            to_x = min(max(xa, xb), self.grid_size - 1)
-            # profile_start("draw_triangle row")
-            if 0 <= y < self.grid_size and from_x <= to_x:
-                self.rgb_buffer[y, int(from_x):int(to_x+1)] = color
-            # profile_end("draw_triangle row")
+        #     from_x = max(min(xa, xb), 0)
+        #     to_x = min(max(xa, xb), self.grid_size - 1)
+        #     # profile_start("draw_triangle row")
+        #     if 0 <= y < self.grid_size and from_x <= to_x:
+        #         self.rgb_buffer[y, int(from_x):int(to_x+1)] = color
+                
+        #     # profile_end("draw_triangle row")
 
 
         # TODO do a performance test (seems like fun)
@@ -251,20 +255,48 @@ class Renderer:
         # Barycentric coordinate method to fill the triangle
         # Right now this method is less effective because we have to go over more pixels with large triangles
         # This becomes a better algorithm with smaller triangles.
-        # min_x = max(min(p1[0], p2[0], p3[0]), 0)
-        # max_x = min(max(p1[0], p2[0], p3[0]), self.grid_size - 1)
-        # min_y = max(min(p1[1], p2[1], p3[1]), 0)
-        # max_y = min(max(p1[1], p2[1], p3[1]), self.grid_size - 1)
+        min_x = max(min(p1[0], p2[0], p3[0]), 0)
+        max_x = min(max(p1[0], p2[0], p3[0]), self.grid_size - 1)
+        min_y = max(min(p1[1], p2[1], p3[1]), 0)
+        max_y = min(max(p1[1], p2[1], p3[1]), self.grid_size - 1)
+        
+        # Precompute stuff for:
+        # edge(p1, p2, p) = (p.x - p1.x) * (p2.y - p1.y) - (p.y - p1.y) * (p2.x - p1.x)
+        A1 = (p3[1] - p2[1])
+        A2 = (p3[0] - p2[0])
+        B1 = (p1[1] - p3[1])
+        B2 = (p1[0] - p3[0])
+        C1 = (p2[1] - p1[1])
+        C2 = (p2[0] - p1[0])
+        
 
-        # for y in range(min_y, max_y + 1):
-        #     for x in range(min_x, max_x + 1):
-        #         # Inline edge functions
-        #         w0 = (x - p2[0]) * (p3[1] - p2[1]) - (y - p2[1]) * (p3[0] - p2[0])
-        #         w1 = (x - p3[0]) * (p1[1] - p3[1]) - (y - p3[1]) * (p1[0] - p3[0])
-        #         w2 = (x - p1[0]) * (p2[1] - p1[1]) - (y - p1[1]) * (p2[0] - p1[0])
+        for y in range(int(min_y), int(max_y + 1)):
+            X = (y - p2[1]) * A2
+            Y = (y - p3[1]) * B2
+            Z = (y - p1[1]) * C2
+            
+            w0 = (min_x - p2[0]) * A1 - X
+            w1 = (min_x - p3[0]) * B1 - Y
+            w2 = (min_x - p1[0]) * C1 - Z
+            
+            # Instead of multiplying, we can add by a delta (we will always increment
+            # x by exactly one)
+            dw0_dx = A1
+            dw1_dx = B1
+            dw2_dx = C1
+            
+            for x in range(int(min_x), int(max_x + 1)):
+                # Inline edge functions
+                # w0 = (x - p2[0]) * A1 - X
+                # w1 = (x - p3[0]) * B1 - Y
+                # w2 = (x - p1[0]) * C1 - Z
 
-        #         if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-        #             self.rgb_buffer[y][x] = color
+                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                    self.rgb_buffer[y][x] = color
+                    pass
+                w0 += dw0_dx
+                w1 += dw1_dx
+                w2 += dw2_dx
 
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
         if PASSTHROUGH:
@@ -273,64 +305,17 @@ class Renderer:
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
-        
-    def draw_polygons(self, scale=1, offset=(0,0)):
-        # Hardcoded upside-down isosceles triangle in 3D
-        # Top two points are farther (larger z), bottom is closer (smaller z)
-        # triangle = [
-        #     [40, 20, 2.0],  # top-left (far)
-        #     [60, 20, 2.0],  # top-right (far)
-        #     [50, 40, 0.5],  # bottom (close)
-        # ]
-        global mouse_x
-        global mouse_y
-        triangle = [
-            [40, 20, 2.0],  # top-left (far)
-            [60, 20, 2.0],  # top-right (far)
-            [mouse_x, mouse_y, 0.5],  # bottom (close)
-        ]
-        
 
-        # Placeholder: just draw a 2D projection for now
-        # We'll handle shading and projection later
-        p1 = (int(triangle[0][0]), int(triangle[0][1]))
-        p2 = (int(triangle[1][0]), int(triangle[1][1]))
-        p3 = (int(triangle[2][0]), int(triangle[2][1]))
+    @timed()
+    def draw_polygons(self, scale=1, offset=(0,0)):
         
-        # I can reuse the same trick to figure out how shaded it is.
-        # right now it is in 3d space. If I have a light source (say (0,-1,0) where -1 is up)
-        # then, I can use the dot product to see how much the triangle face is pointing towards it.
-        # However, this means I must get the face of the triangle (the direction). 
-        # If I use the cross product on two points then I will get a direction vector.
-        # I can then use this direction vector to do a dot product calculation with the light vector.
-        
-        # I'll do the dot product and cross product myself for practice.
-        # Sike, I realized as I was doing the cross product that this is something I do not want to
-        # do by hand or even type it in each time. I'd rather just tell a helper function to do a cross
-        # product between two matricies.
-        
-        # Get the triangle face vector (eg. by doing a cross product of b and c while offsetting by a)
-        a = np.subtract(triangle[1], triangle[0])
-        b = np.subtract(triangle[2], triangle[0])
-        triangle_face = normalize(np.cross(a, b))
-        # It would be nice if i normalized it. This can be done by dividing all the numbers by the pythagoreas of all of them
+        offset = (offset[0] + self.camera_pos[0], offset[1] + self.camera_pos[1])
         
         # Get the light source vector (given) inverted because my triangle is
         light = [0,-1,0]
         
         # Get the camera direction (towards negative z)
         camera_direction = [0,0,-1]
-        
-        # Get the dot product between the two (fairly simple)
-        light_amount = np.dot(triangle_face, light)
-        
-        # cap it
-        brightness = max(0, (light_amount + 1) / 2)
-        
-        # Apply the dot product to a whiteness level
-        color = tuple(int(brightness * c) for c in COLOR_WHITE)
-        color = (color[0], color[1], color[2])  # make it more explicit
-        # self.fill_triangle(p1, p2, p3, color)
         
         def rotation_matrix_x(theta):
             c, s = np.cos(theta), np.sin(theta)
@@ -470,6 +455,19 @@ class Renderer:
                         if event.button == 1:  # Left click
                             # self.active_point = (self.active_point + 1) % 3
                             print(self.poly_points)
+                keys = pygame.key.get_pressed()
+                if keys[pygame.K_w]:  # forward (z+)
+                    self.camera_pos[2] += self.camera_speed
+                if keys[pygame.K_s]:  # backward (z-)
+                    self.camera_pos[2] -= self.camera_speed
+                if keys[pygame.K_a]:  # left (x-)
+                    self.camera_pos[0] -= self.camera_speed
+                if keys[pygame.K_d]:  # right (x+)
+                    self.camera_pos[0] += self.camera_speed
+                if keys[pygame.K_SPACE]:  # up (y+)
+                    self.camera_pos[1] += self.camera_speed * (-1)
+                if keys[pygame.K_c]:  # down (y-)
+                    self.camera_pos[1] -= self.camera_speed * (-1)
 
             if not PASSTHROUGH:
                 self.render_buffer()
