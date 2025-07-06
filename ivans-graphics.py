@@ -28,7 +28,7 @@ import os
 # "ship.obj",
 # "name.obj", and
 # "teapot.obj".
-RENDER_FILE = "ship.obj"
+RENDER_FILE = "./models/ship.obj"
 
 # DISTANCE_TO_OBJECT modifies how far the object is from the "camera".
 # "Camera" in quotations because it isn't fully implemented.
@@ -38,7 +38,7 @@ RENDER_FILE = "ship.obj"
 # ship.obj ->     6 distance
 # name.obj ->     6 distance
 # teapot.obj -> 100 distance (https://people.sc.fsu.edu/~jburkardt/)
-DISTANCE_TO_OBJECT = 6
+DISTANCE_TO_OBJECT = 10
 
 # Triangles faces are determined by whether they are clockwise or not.
 # By default clockwise triangles are rendered while counterclockwise
@@ -78,8 +78,10 @@ def main():
         win.update()  # render as many frames as you can!
 
         r_scene.calculate_rotation_matrix()
-        avarage_fps += (avarage_fps_weight *
-                        ((1.0 / (time.time() - start_time)) - avarage_fps))
+        tmp = (time.time() - start_time)
+        if tmp != 0:
+            avarage_fps += (avarage_fps_weight *
+                            ((1.0 / tmp) - avarage_fps))
 
 
 # Really inefficient in Python (should be a construct) but for the sake of
