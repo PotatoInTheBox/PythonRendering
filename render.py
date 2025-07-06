@@ -85,6 +85,33 @@ def load_obj(filepath):
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
 
+def get_projection_matrix(fov, aspect, near, far):
+    f = 1 / np.tan(fov / 2)
+    proj = np.zeros((4, 4))
+    proj[0,0] = f / aspect
+    proj[1,1] = f
+    proj[2,2] = (far + near) / (near - far)
+    proj[2,3] = (2 * far * near) / (near - far)
+    proj[3,2] = -1
+    return proj
+
+def rotation_matrix_x(theta):
+        c, s = np.cos(theta), np.sin(theta)
+        return np.array([[1, 0, 0],
+                        [0, c, -s],
+                        [0, s,  c]])
+
+def rotation_matrix_y(theta):
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[ c, 0, s],
+                    [ 0, 1, 0],
+                    [-s, 0, c]])
+def rotation_matrix_z(theta):
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s, 0],
+                    [s,  c, 0],
+                    [0,  0, 1]])
+
 class Renderer:
     def __init__(self, width: int = 800, height: int = 800, grid_size: int = 200) -> None:
         pygame.init()
@@ -118,8 +145,12 @@ class Renderer:
         utah_teapot = load_obj("./models/ship.obj")
         self.object = utah_teapot
         
-        self.camera_pos = [0.0,0.0,0.0]
+        self.camera_pos = [0.0,0.0,-10.0]
+        self.dragging = False
+        self.last_mouse_pos = (0, 0)
+        self.camera_rot = [0.0,0.0,0.0]
         self.camera_speed = 1.0
+        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.01,far=1000)
 
         
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
@@ -250,9 +281,27 @@ class Renderer:
             dw1_dx = A1
             dw2_dx = A2
 
+            def edge(a, b, c):
+                # Returns twice the signed area of triangle abc
+                return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
+            area = edge(p1, p2, p3)  # Precompute this outside the loop
+            if area == 0:
+                return  # skip degenerate triangle
+            
             for x in range(min_x, max_x + 1):
+                # Accept both types of faces. Can be optimized if only one is supported
                 if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    self.rgb_buffer[y, x] = color
+                    # Normalize barycentric coordinates
+                    alpha = w0 / area
+                    beta = w1 / area
+                    gamma = w2 / area
+
+                    # Interpolate Z
+                    z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
+                    if z < self.z_buffer[y, x]:
+                        self.rgb_buffer[y, x] = color
+                        # Do a dumb interpolation (won't work for different perspectives)
+                        self.z_buffer[y, x] = z
                 w0 += dw0_dx
                 w1 += dw1_dx
                 w2 += dw2_dx
@@ -265,69 +314,83 @@ class Renderer:
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
-
+            
     @timed()
-    def draw_polygons(self, scale=1, offset=(0,0)):
-        
-        offset = (offset[0] + self.camera_pos[0], offset[1] + self.camera_pos[1])
-        
-        # Get the light source vector (given) inverted because my triangle is
-        light = [0,-1,0]
-        
-        # Get the camera direction (towards negative z)
-        camera_direction = [0,0,-1]
-        
-        def rotation_matrix_x(theta):
-            c, s = np.cos(theta), np.sin(theta)
-            return np.array([
-                [1, 0, 0],
-                [0, c, -s],
-                [0, s, c]
-            ])
-
-        def rotation_matrix_y(theta):
-            c, s = np.cos(theta), np.sin(theta)
-            return np.array([
-                [ c, 0, s],
-                [ 0, 1, 0],
-                [-s, 0, c]
-            ])
+    def draw_polygons(self, scale=1, offset=(0, 0)):
+        # === Setup ===
+        light = np.array([0, -1, 0])
+        camera_direction = np.array([0, 0, 1])  # assuming camera looks along +Z
 
         global angle
         Rx = rotation_matrix_x(angle)
         Ry = rotation_matrix_y(angle)
-        R = Ry @ Rx  # first rotate X, then Y
-        # R = Ry
+        R = Ry @ Rx
         angle += 0.01
         
+        pitch, yaw, roll = self.camera_rot
+        Rx = rotation_matrix_x(pitch)
+        Ry = rotation_matrix_y(yaw)
+        Rz = rotation_matrix_z(roll)
+        R_cam = Rz @ Ry @ Rx  # camera rotation
+        R_view = R_cam.T  # inverse of rotation matrix is transpose
+
         for face_index in self.object[1]:
-            tri = tuple(
-                R @ np.array(self.object[0][i])
-                for i in face_index
-            )
-            tri = tuple(
-                [v[0] * scale + offset[0], v[1] * scale + offset[1], v[2] * scale]
-                for v in tri
-            )
-            a = np.subtract(tri[1], tri[0])
-            b = np.subtract(tri[2], tri[0])
-            triangle_face = normalize(np.cross(a, b))
-            light_amount = np.dot(triangle_face, light)
-            # use the triangle face to cull if it isn't facing the camera
-            triangle_facing_camera = np.dot(triangle_face, camera_direction)
-            if triangle_facing_camera > 0:  # I have no clue if it should be negative or positive
-                continue
-            brightness = max(0, (light_amount + 1) / 2)
+            # === World-space triangle ===
+            tri_world = [np.array(self.object[0][i]) for i in face_index]
+
+            # === Rotate object ===
+            tri_rotated = [R @ v for v in tri_world]
+            
+            # === View transform: apply inverse camera rotation and translation ===
+            tri_camera = [R_view @ (v - self.camera_pos) for v in tri_rotated]
+
+            # === Translate by camera position (view transform: inverse translation) ===
+            # tri_camera = [v - self.camera_pos for v in tri_rotated]
+
+            # === Compute face normal and backface culling ===
+            a = tri_camera[1] - tri_camera[0]
+            b = tri_camera[2] - tri_camera[0]
+            normal = normalize(np.cross(a, b))
+
+            if np.dot(normal, camera_direction) > 0:
+                continue  # Cull
+
+            # === Lighting ===
+            brightness = max(0, (np.dot(normal, light) + 1) / 2)
             color = tuple(int(brightness * c) for c in COLOR_WHITE)
-            color = (color[0], color[1], color[2])  # make it more explicit
-            # 
-            # We project it (which we will simply assume it's already projected)
-            self.fill_triangle(tri[0], tri[1], tri[2], color) # type: ignore
+
+            # === Project ===
+            tri_homogeneous = [np.append(v, 1) for v in tri_camera]
+            tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
+            tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
+
+            # === Convert to screen space ===
+            tri_screen = [
+                (
+                    int((v[0] + 1) * 0.5 * self.grid_size * scale + offset[0]),
+                    int((1 - (v[1] + 1) * 0.5) * self.grid_size * scale + offset[1]),
+                    v[2]  # keep depth
+                )
+                for v in tri_ndc
+            ]
+
+            self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
+
             
 
     @timed("render_buffer")
     def render_buffer(self):
-        surface = pygame.surfarray.make_surface(self.rgb_buffer.swapaxes(0, 1))
+        DEBUG_Z_BUFFER = False  # Toggle this to enable/disable Z buffer debug view
+        DEBUG_Z_MIN = -100  # how close we can see
+        DEBUG_Z_MAX = 100 # how far we can see
+        if DEBUG_Z_BUFFER:
+            # Normalize Z buffer to [0, 255] for display
+            z_clipped = np.clip(self.z_buffer, DEBUG_Z_MIN, DEBUG_Z_MAX)
+            z_norm = ((z_clipped - DEBUG_Z_MIN) / (DEBUG_Z_MAX - DEBUG_Z_MIN) * 255).astype(np.uint8)
+            z_gray = np.stack([z_norm] * 3, axis=-1)
+            surface = pygame.surfarray.make_surface(z_gray.swapaxes(0, 1))
+        else:
+            surface = pygame.surfarray.make_surface(self.rgb_buffer.swapaxes(0, 1))
         surface = pygame.transform.scale(surface, (self.width, self.height))
         self.screen.blit(surface, (0, 0))
 
@@ -358,7 +421,7 @@ class Renderer:
                 # self.draw_circle((20, 8), 8, COLOR_GREEN)
                 # self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
                 # self.draw_polygons_2d()
-                self.draw_polygons(scale=20, offset=(100,100))
+                self.draw_polygons()
                 
                 # Spinning line (10px long from center)
                 # cx, cy = self.grid_size // 2, self.grid_size // 2
@@ -415,26 +478,50 @@ class Renderer:
                         if event.button == 1:  # Left click
                             # self.active_point = (self.active_point + 1) % 3
                             print(self.poly_points)
+                    # ====== Camera rotation stuff ======
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                            if event.button == 1:  # Left click
+                                self.dragging = True
+                                self.last_mouse_pos = pygame.mouse.get_pos()
+                    elif event.type == pygame.MOUSEBUTTONUP:
+                        if event.button == 1:
+                            self.dragging = False
+                            print(f"Camera rotated with new vector ({self.camera_rot[0]}, {self.camera_rot[1]}, {self.camera_rot[2]})")
+                    elif event.type == pygame.MOUSEMOTION and self.dragging:
+                        x, y = pygame.mouse.get_pos()
+                        dx = x - self.last_mouse_pos[0]
+                        dy = y - self.last_mouse_pos[1]
+                        self.last_mouse_pos = (x, y)
+
+                        self.camera_rot[1] -= dx * 0.005  # yaw (Y axis)
+                        self.camera_rot[0] -= dy * 0.005  # pitch (X axis)
                 keys = pygame.key.get_pressed()
-                if keys[pygame.K_w]:  # forward (z+)
-                    self.camera_pos[2] += self.camera_speed
-                if keys[pygame.K_s]:  # backward (z-)
-                    self.camera_pos[2] -= self.camera_speed
-                if keys[pygame.K_a]:  # left (x-)
-                    self.camera_pos[0] -= self.camera_speed
-                if keys[pygame.K_d]:  # right (x+)
-                    self.camera_pos[0] += self.camera_speed
-                if keys[pygame.K_SPACE]:  # up (y+)
-                    self.camera_pos[1] += self.camera_speed * (-1)
-                if keys[pygame.K_c]:  # down (y-)
-                    self.camera_pos[1] -= self.camera_speed * (-1)
+                move_dir = np.array([0.0, 0.0, 0.0])
+                if keys[pygame.K_w]: move_dir[2] += 1
+                if keys[pygame.K_s]: move_dir[2] -= 1
+                if keys[pygame.K_a]: move_dir[0] += 1
+                if keys[pygame.K_d]: move_dir[0] -= 1
+                if keys[pygame.K_SPACE]: move_dir[1] -= 1
+                if keys[pygame.K_c]: move_dir[1] += 1
+
+                if np.linalg.norm(move_dir) > 0:
+                    move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed
+
+                    # Camera rotation to world space
+                    pitch, yaw, roll = self.camera_rot
+                    Rx = rotation_matrix_x(pitch)
+                    Ry = rotation_matrix_y(yaw)
+                    Rz = rotation_matrix_z(roll)
+                    R_cam = Rz @ Ry @ Rx
+                    move_world = R_cam @ move_dir
+                    self.camera_pos += move_world
 
             if not PASSTHROUGH:
                 self.render_buffer()
             
             # Clear the RGB buffer for the next frame
             self.rgb_buffer.fill(0)
-            self.z_buffer.fill(0.0)
+            self.z_buffer.fill(np.inf)
 
             pygame.display.flip()
             self.clock.tick(60)
