@@ -215,12 +215,7 @@ class Renderer:
         if PASSTHROUGH:
             pygame.draw.line(self.screen, color, start, end, width)
             return
-        # cap the start and end to the 2d drawing plane.
-        start_x = max(start[0],0)
-        end_x = min(end[0], self.grid_size - 1)
-        start_y = max(start[1],0)
-        end_y = min(end[1], self.grid_size - 1)
-        self.bresenhams_algorithm_draw_line((start_x, start_y), (end_x, end_y), color)
+        self.bresenhams_algorithm_draw_line(start, end, color)
 
     # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
     @timed()
