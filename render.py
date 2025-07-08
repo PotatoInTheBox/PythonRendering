@@ -205,7 +205,7 @@ class Renderer:
         # The camera is facing towards positive z.
         self.camera_rot = [0.0,0.0,0]
         self.camera_speed = 1.0
-        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=20,far=1000)
+        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.1,far=1000)
 
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
@@ -415,14 +415,10 @@ class Renderer:
             # === Translate by camera position (view transform: inverse translation) ===
             # tri_camera = [v - self.camera_pos for v in tri_rotated]
 
-            # === Compute face normal and backface culling ===
+            # === Compute face normal ===
             a = tri_camera[1] - tri_camera[0]
             b = tri_camera[2] - tri_camera[0]
             normal = normalize(np.cross(a, b))
-
-            facing_camera = np.dot(normal, camera_direction) < 0
-            if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
-                continue  # Cull
 
             # === Lighting ===
             brightness = max(0, (np.dot(normal, light) + 1) / 2)
@@ -431,10 +427,19 @@ class Renderer:
             # === Project ===
             tri_homogeneous = [np.append(v, 1) for v in tri_camera]
             tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
+            # Skip triangles fully behind the camera
             # TODO we are early culling because if I don't then the raster freaks out due to excessively large triangles
             if any(v[3] <= 0 for v in tri_projected):
                 continue  # Skip invalid projection because it is behind camera
             tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
+            
+            # === Backface culling using screen-space normal ===
+            a = tri_ndc[1][:2] - tri_ndc[0][:2]
+            b = tri_ndc[2][:2] - tri_ndc[0][:2]
+            screen_normal_z = a[0]*b[1] - a[1]*b[0]  # 2D cross product = signed area
+            facing_camera = screen_normal_z < 0
+            if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
+                continue  # Cull
             
             # === Frustum culling ===
             # if all(
