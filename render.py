@@ -25,6 +25,10 @@ angle = 0
 mouse_x = 0
 mouse_y = 0
 
+draw_z_buffer = False
+draw_faces = True
+draw_lines = False
+
 from typing import List, Tuple
 COLOR_BLACK = (0, 0, 0)
 COLOR_RED = (255, 0, 0)
@@ -37,6 +41,10 @@ COLOR_PINK = (255, 105, 180)
 FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 frame_count = 0  # count frames rendered so far
 _profile_timers = {}  # keep track of our named profilers
+
+OBJ_PATH = "./models/teapot.obj"
+CONUTER_CLOCKWISE_TRIANGLES = False
+START_DISTANCE = 100.0
 
 def profile_start(name: str, n=60):
     global frame_count
@@ -96,10 +104,10 @@ def get_projection_matrix(fov, aspect, near, far):
     return proj
 
 def rotation_matrix_x(theta):
-        c, s = np.cos(theta), np.sin(theta)
-        return np.array([[1, 0, 0],
-                        [0, c, -s],
-                        [0, s,  c]])
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[1, 0, 0],
+                    [0, c, -s],
+                    [0, s,  c]])
 
 def rotation_matrix_y(theta):
     c, s = np.cos(theta), np.sin(theta)
@@ -142,15 +150,15 @@ class Renderer:
             [(22, 40), (28, 45), (24, 50)],
         ]
         
-        utah_teapot = load_obj("./models/ship.obj")
+        utah_teapot = load_obj(OBJ_PATH)
         self.object = utah_teapot
         
-        self.camera_pos = [0.0,0.0,-10.0]
+        self.camera_pos = [0.0,0.0,-float(START_DISTANCE)]
         self.dragging = False
         self.last_mouse_pos = (0, 0)
         self.camera_rot = [0.0,0.0,0.0]
         self.camera_speed = 1.0
-        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.01,far=1000)
+        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.1,far=1000)
 
         
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
@@ -352,7 +360,7 @@ class Renderer:
             b = tri_camera[2] - tri_camera[0]
             normal = normalize(np.cross(a, b))
 
-            if np.dot(normal, camera_direction) > 0:
+            if np.dot(normal, camera_direction) > 0 != CONUTER_CLOCKWISE_TRIANGLES:
                 continue  # Cull
 
             # === Lighting ===
@@ -363,6 +371,10 @@ class Renderer:
             tri_homogeneous = [np.append(v, 1) for v in tri_camera]
             tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
             tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
+            
+            # === Frustum culling ===
+            if all(v[2] <= 0 for v in tri_camera):
+                continue  # All behind camera
 
             # === Convert to screen space ===
             tri_screen = [
@@ -373,20 +385,30 @@ class Renderer:
                 )
                 for v in tri_ndc
             ]
-
-            self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
+            if draw_faces or draw_z_buffer:
+                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
+            if draw_lines:
+                self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
 
             
 
     @timed("render_buffer")
     def render_buffer(self):
-        DEBUG_Z_BUFFER = False  # Toggle this to enable/disable Z buffer debug view
-        DEBUG_Z_MIN = -100  # how close we can see
-        DEBUG_Z_MAX = 100 # how far we can see
-        if DEBUG_Z_BUFFER:
+        global draw_z_buffer  # Toggle this to enable/disable Z buffer debug view
+        # DEBUG_Z_MIN = -100  # how close we can see
+        # DEBUG_Z_MAX = 100 # how far we can see
+        if draw_z_buffer:
             # Normalize Z buffer to [0, 255] for display
-            z_clipped = np.clip(self.z_buffer, DEBUG_Z_MIN, DEBUG_Z_MAX)
-            z_norm = ((z_clipped - DEBUG_Z_MIN) / (DEBUG_Z_MAX - DEBUG_Z_MIN) * 255).astype(np.uint8)
+            finite_z = self.z_buffer[np.isfinite(self.z_buffer)]
+            if finite_z.size == 0:
+                return  # Nothing to render
+
+            z_min, z_max = finite_z.min(), finite_z.max()
+            if z_min == z_max:
+                z_max += 1e-5  # Prevent divide by zero
+
+            z_norm = ((z_max - self.z_buffer) / (z_max - z_min) * 205 + 50).astype(np.uint8)
+            z_norm[~np.isfinite(self.z_buffer)] = 0  # Set infs to black
             z_gray = np.stack([z_norm] * 3, axis=-1)
             surface = pygame.surfarray.make_surface(z_gray.swapaxes(0, 1))
         else:
@@ -495,8 +517,21 @@ class Renderer:
 
                         self.camera_rot[1] -= dx * 0.005  # yaw (Y axis)
                         self.camera_rot[0] -= dy * 0.005  # pitch (X axis)
+                    elif event.type == pygame.KEYDOWN and event.key == pygame.K_z:
+                        global draw_z_buffer
+                        draw_z_buffer = not draw_z_buffer
+                    elif event.type == pygame.KEYDOWN and event.key == pygame.K_v:
+                        global draw_lines
+                        draw_lines = not draw_lines
+                    elif event.type == pygame.KEYDOWN and event.key == pygame.K_f:
+                        global draw_faces
+                        draw_faces = not draw_faces
                 keys = pygame.key.get_pressed()
                 move_dir = np.array([0.0, 0.0, 0.0])
+                if keys[pygame.K_LSHIFT]: 
+                    move_boost = 5
+                else: 
+                    move_boost = 1
                 if keys[pygame.K_w]: move_dir[2] += 1
                 if keys[pygame.K_s]: move_dir[2] -= 1
                 if keys[pygame.K_a]: move_dir[0] += 1
@@ -505,7 +540,8 @@ class Renderer:
                 if keys[pygame.K_c]: move_dir[1] += 1
 
                 if np.linalg.norm(move_dir) > 0:
-                    move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed
+                    # move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed
+                    move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed * move_boost
 
                     # Camera rotation to world space
                     pitch, yaw, roll = self.camera_rot
