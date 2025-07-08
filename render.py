@@ -40,11 +40,67 @@ COLOR_PINK = (255, 105, 180)
 
 FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 frame_count = 0  # count frames rendered so far
-_profile_timers = {}  # keep track of our named profilers
 
-OBJ_PATH = "./models/teapot.obj"
+# Accumulates total time spent in named segments
+_profile_accumulators = {}
+# keep track of our named profilers
+_profile_timers = {}
+
+OBJ_PATH = "./models/ship.obj"
 CONUTER_CLOCKWISE_TRIANGLES = False
-START_DISTANCE = 100.0
+START_DISTANCE = 10.0
+
+def profile_accumulate_start(name: str):
+    if name not in _profile_accumulators:
+        _profile_accumulators[name] = [0.0, 0, None]  # [total_time, count, start_time]
+    _profile_accumulators[name][2] = time.perf_counter()  # Reset start time
+
+def profile_accumulate_end(name: str):
+    if name not in _profile_accumulators or _profile_accumulators[name][2] is None:
+        return  # ignore unmatched end
+    start = _profile_accumulators[name][2]
+    elapsed = time.perf_counter() - start
+    _profile_accumulators[name][0] += elapsed
+    _profile_accumulators[name][1] += 1
+    _profile_accumulators[name][2] = None  # clear start
+
+def profile_accumulate_report(intervals=1):
+    print("\n////////==== Report Start ====\\\\\\\\\\\\\\\\")
+    grand_total = sum(total for total, count, _ in _profile_accumulators.values())
+
+    for name, (total, count, _) in _profile_accumulators.items():
+        if count == 0:
+            continue
+        total_ms = total * 1000
+        avg_ms = (total / (count / intervals)) * 1000
+        percent = (total / grand_total) * 100 if grand_total > 0 else 0
+        if percent >= 100:
+            percent_str = "100%"
+        elif percent >= 10:
+            percent_str = f"{percent:4.1f}%"
+        else:
+            percent_str = f"{percent:4.2f}%"
+        print(f"{percent_str} — {name}: {total_ms/intervals:.3f}ms total over {count/intervals} calls (avg {avg_ms/intervals:.3f}ms)")
+
+    _profile_accumulators.clear()
+    print("\\\\\\\\\\\\\\\\==== Report End   ====////////")
+
+def timed(name=""):
+    def wrapper(fn):
+        def inner(*args, **kwargs):
+            label = name or fn.__name__
+            label = "f:" + label
+            start = time.perf_counter()
+            result = fn(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            if label not in _profile_accumulators:
+                _profile_accumulators[label] = [0.0, 0, None]
+            _profile_accumulators[label][0] += elapsed
+            _profile_accumulators[label][1] += 1
+            return result
+        return inner
+    return wrapper
+
 
 def profile_start(name: str, n=60):
     global frame_count
@@ -59,19 +115,6 @@ def profile_end(name: str, n=60):
             print(f"{name}: {elapsed:.3f}ms")
         else:
             print(f"Warning: profile_end called for '{name}' without matching profile_start")
-
-def timed(name="", n=60):
-    def wrapper(fn):
-        def inner(*args, **kwargs):
-            global frame_count
-            result = fn(*args, **kwargs)
-            if frame_count % n == 0:
-                start = time.perf_counter()
-                fn(*args, **kwargs)
-                print(f"{name or fn.__name__}: {(time.perf_counter() - start) * 1000:.3f}ms")
-            return result
-        return inner
-    return wrapper
 
 def load_obj(filepath):
     vertices = []
@@ -89,7 +132,7 @@ def load_obj(filepath):
                 triangles.append(tuple(face))
 
     return vertices, triangles
-
+@timed()
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
 
@@ -102,18 +145,19 @@ def get_projection_matrix(fov, aspect, near, far):
     proj[2,3] = (2 * far * near) / (near - far)
     proj[3,2] = -1
     return proj
-
+@timed()
 def rotation_matrix_x(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[1, 0, 0],
                     [0, c, -s],
                     [0, s,  c]])
-
+@timed()
 def rotation_matrix_y(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[ c, 0, s],
                     [ 0, 1, 0],
                     [-s, 0, c]])
+@timed()
 def rotation_matrix_z(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[c, -s, 0],
@@ -133,7 +177,7 @@ class Renderer:
 
         # Initialize 2D RGB buffer
         self.rgb_buffer = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
-        self.z_buffer = np.full((self.grid_size, self.grid_size), np.inf, dtype=np.float32)
+        self.z_buffer = np.full((self.grid_size, self.grid_size), -np.inf, dtype=np.float32)
         # Initialize 2D polygon buffer
         self.triangle_buffer = [
             [(12, 14), (18, 22), (15, 30)],
@@ -153,14 +197,16 @@ class Renderer:
         utah_teapot = load_obj(OBJ_PATH)
         self.object = utah_teapot
         
-        self.camera_pos = [0.0,0.0,-float(START_DISTANCE)]
+        # The camera will need to face -z. So we need to push the camera towards positive z.
+        # This is because our object will be at 0.
+        self.camera_pos = [0.0,0.0,float(START_DISTANCE)]
         self.dragging = False
         self.last_mouse_pos = (0, 0)
-        self.camera_rot = [0.0,0.0,0.0]
+        # The camera is facing towards positive z.
+        self.camera_rot = [0.0,0.0,0]
         self.camera_speed = 1.0
-        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.1,far=1000)
+        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=20,far=1000)
 
-        
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
         return 0 <= x < self.grid_size and 0 <= y < self.grid_size
@@ -169,10 +215,15 @@ class Renderer:
         if PASSTHROUGH:
             pygame.draw.line(self.screen, color, start, end, width)
             return
-
-        self.bresenhams_algorithm_draw_line(start, end, color)
+        # cap the start and end to the 2d drawing plane.
+        start_x = max(start[0],0)
+        end_x = min(end[0], self.grid_size - 1)
+        start_y = max(start[1],0)
+        end_y = min(end[1], self.grid_size - 1)
+        self.bresenhams_algorithm_draw_line((start_x, start_y), (end_x, end_y), color)
 
     # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
+    @timed()
     def bresenhams_algorithm_draw_line(self, start, end, color):
         is_x_flipped = False  # for handling slope < 0
         is_x_dominant_axis = False  # for handling slope > 1
@@ -229,6 +280,7 @@ class Renderer:
                 p += 2 * (dy - dx)
                 y += 1
 
+    @timed()
     def draw_square(self, top_left: Tuple[int, int], size: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             pygame.draw.rect(self.screen, color, (*top_left, size, size))
@@ -238,6 +290,7 @@ class Renderer:
                 if self._is_bounded((x, y)):
                     self.rgb_buffer[y][x] = color
 
+    @timed()
     def draw_pixel(self, position: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             self.screen.set_at(position, color)
@@ -246,6 +299,7 @@ class Renderer:
         if self._is_bounded((x,y)):
             self.rgb_buffer[y][x] = color
 
+    @timed()
     def draw_circle(self, center: Tuple[int, int], radius: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             pygame.draw.circle(self.screen, color, center, radius)
@@ -258,6 +312,7 @@ class Renderer:
                     self.rgb_buffer[y][x] = color
 
     # 500x500 triangles cost 0.8ms to draw (not great)
+    @timed()
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
@@ -306,7 +361,7 @@ class Renderer:
 
                     # Interpolate Z
                     z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
-                    if z < self.z_buffer[y, x]:
+                    if z > self.z_buffer[y, x]:
                         self.rgb_buffer[y, x] = color
                         # Do a dumb interpolation (won't work for different perspectives)
                         self.z_buffer[y, x] = z
@@ -314,7 +369,7 @@ class Renderer:
                 w1 += dw1_dx
                 w2 += dw2_dx
 
-
+    @timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
         if PASSTHROUGH:
             pygame.draw.lines(self.screen, color, True, [p1, p2, p3])
@@ -325,15 +380,22 @@ class Renderer:
             
     @timed()
     def draw_polygons(self, scale=1, offset=(0, 0)):
+        profile_accumulate_start("draw_polygons: pre_compute")
         # === Setup ===
-        light = np.array([0, -1, 0])
-        camera_direction = np.array([0, 0, 1])  # assuming camera looks along +Z
+        if CONUTER_CLOCKWISE_TRIANGLES:
+            light = np.array([0, -1, 0]) # for some reason I have to flip the light direction when the triangles are different
+            # I guess that kinda makes sense. I'm getting the normals of the triangle, which if counter clockwise, will lead
+            # to the triangle facing the opposite direction, and thus the light.
+            # TODO Let's instead just change the light calculations to invert in the normal being flipped.
+        else:
+            light = np.array([0, 1, 0]) # The light is pointing towards positive y. This means down for us.
+        camera_direction = np.array([0, 0, 1])
 
         global angle
         Rx = rotation_matrix_x(angle)
         Ry = rotation_matrix_y(angle)
         R = Ry @ Rx
-        angle += 0.01
+        # angle += 0.01
         
         pitch, yaw, roll = self.camera_rot
         Rx = rotation_matrix_x(pitch)
@@ -341,8 +403,11 @@ class Renderer:
         Rz = rotation_matrix_z(roll)
         R_cam = Rz @ Ry @ Rx  # camera rotation
         R_view = R_cam.T  # inverse of rotation matrix is transpose
+        profile_accumulate_end("draw_polygons: pre_compute")
 
+        profile_accumulate_start("draw_polygons: project_and_draw")
         for face_index in self.object[1]:
+            profile_accumulate_start("draw_polygons: project_and_draw: project")
             # === World-space triangle ===
             tri_world = [np.array(self.object[0][i]) for i in face_index]
 
@@ -360,7 +425,8 @@ class Renderer:
             b = tri_camera[2] - tri_camera[0]
             normal = normalize(np.cross(a, b))
 
-            if np.dot(normal, camera_direction) > 0 != CONUTER_CLOCKWISE_TRIANGLES:
+            facing_camera = np.dot(normal, camera_direction) < 0
+            if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
                 continue  # Cull
 
             # === Lighting ===
@@ -370,11 +436,21 @@ class Renderer:
             # === Project ===
             tri_homogeneous = [np.append(v, 1) for v in tri_camera]
             tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
+            # TODO we are early culling because if I don't then the raster freaks out due to excessively large triangles
+            if any(v[3] <= 0 for v in tri_projected):
+                continue  # Skip invalid projection because it is behind camera
             tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
             
             # === Frustum culling ===
-            if all(v[2] <= 0 for v in tri_camera):
-                continue  # All behind camera
+            # if all(
+            #     -1 <= v[0] <= 1 and
+            #     -1 <= v[1] <= 1 and
+            #     0 <= v[2] <= 1  # z in [0, 1] in OpenGL-style projection 
+            #     for v in tri_ndc
+            # ):
+            #     continue
+            # else:
+            #     pass
 
             # === Convert to screen space ===
             tri_screen = [
@@ -385,10 +461,14 @@ class Renderer:
                 )
                 for v in tri_ndc
             ]
+            profile_accumulate_end("draw_polygons: project_and_draw: project")
+            profile_accumulate_start("draw_polygons: project_and_draw: draw")
             if draw_faces or draw_z_buffer:
                 self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
             if draw_lines:
                 self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
+            profile_accumulate_end("draw_polygons: project_and_draw: draw")
+        profile_accumulate_end("draw_polygons: project_and_draw")
 
             
 
@@ -406,9 +486,12 @@ class Renderer:
             z_min, z_max = finite_z.min(), finite_z.max()
             if z_min == z_max:
                 z_max += 1e-5  # Prevent divide by zero
+            
+            z_range = z_max - z_min
+            z_scaled = np.clip((self.z_buffer - z_min) / z_range, 0, 1)
+            z_norm = (z_scaled * 205 + 50).astype(np.uint8)  # near = dark, far = bright
+            z_norm[~np.isfinite(self.z_buffer)] = 0  # Inf → black
 
-            z_norm = ((z_max - self.z_buffer) / (z_max - z_min) * 205 + 50).astype(np.uint8)
-            z_norm[~np.isfinite(self.z_buffer)] = 0  # Set infs to black
             z_gray = np.stack([z_norm] * 3, axis=-1)
             surface = pygame.surfarray.make_surface(z_gray.swapaxes(0, 1))
         else:
@@ -532,12 +615,15 @@ class Renderer:
                     move_boost = 5
                 else: 
                     move_boost = 1
-                if keys[pygame.K_w]: move_dir[2] += 1
-                if keys[pygame.K_s]: move_dir[2] -= 1
-                if keys[pygame.K_a]: move_dir[0] += 1
-                if keys[pygame.K_d]: move_dir[0] -= 1
-                if keys[pygame.K_SPACE]: move_dir[1] -= 1
-                if keys[pygame.K_c]: move_dir[1] += 1
+                if keys[pygame.K_w]: move_dir[2] -= 1
+                if keys[pygame.K_s]: move_dir[2] += 1
+                if keys[pygame.K_a]: move_dir[0] -= 1
+                if keys[pygame.K_d]: move_dir[0] += 1
+                if keys[pygame.K_SPACE]: move_dir[1] += 1
+                if keys[pygame.K_c]: move_dir[1] -= 1
+                global angle
+                if keys[pygame.K_RIGHT]: angle += 0.05
+                if keys[pygame.K_LEFT]: angle -= 0.05
 
                 if np.linalg.norm(move_dir) > 0:
                     # move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed
@@ -555,9 +641,12 @@ class Renderer:
             if not PASSTHROUGH:
                 self.render_buffer()
             
+            if frame_count % 60 == 0:
+                profile_accumulate_report(intervals=60)
+            
             # Clear the RGB buffer for the next frame
             self.rgb_buffer.fill(0)
-            self.z_buffer.fill(np.inf)
+            self.z_buffer.fill(-np.inf)
 
             pygame.display.flip()
             self.clock.tick(60)
