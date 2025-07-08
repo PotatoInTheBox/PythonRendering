@@ -645,7 +645,7 @@ class Renderer:
                 profile_accumulate_report(intervals=60)
             
             # Clear the RGB buffer for the next frame
-            self.rgb_buffer.fill(0)
+            self.rgb_buffer[:] = [50, 50, 120]
             self.z_buffer.fill(-np.inf)
 
             pygame.display.flip()
