@@ -50,82 +50,87 @@ _profile_accumulators = {}
 # keep track of our named profilers
 _profile_timers = {}
 
+class Profiler:
+    @staticmethod
+    def profile_accumulate_start(name: str):
+        if name not in _profile_accumulators:
+            _profile_accumulators[name] = [0.0, 0, None]  # [total_time, count, start_time]
+        _profile_accumulators[name][2] = time.perf_counter()  # Reset start time
 
+    @staticmethod
+    def profile_accumulate_end(name: str):
+        if name not in _profile_accumulators or _profile_accumulators[name][2] is None:
+            return  # ignore unmatched end
+        start = _profile_accumulators[name][2]
+        elapsed = time.perf_counter() - start
+        _profile_accumulators[name][0] += elapsed
+        _profile_accumulators[name][1] += 1
+        _profile_accumulators[name][2] = None  # clear start
 
+    @staticmethod
+    def profile_accumulate_report(intervals=1):
+        print("\n////////==== Report Start ====\\\\\\\\\\\\\\\\")
+        grand_total = sum(total for total, count, _ in _profile_accumulators.values())
+
+        # Sort keys: normal entries first (alphabetical), then those starting with "f:"
+        sorted_items = sorted(_profile_accumulators.items(), key=lambda x: (x[0].startswith("f:"), x[0]))
+
+        for name, (total, count, _) in sorted_items:
+            if count == 0:
+                continue
+            total_ms = total * 1000
+            avg_ms = (total / (count / intervals)) * 1000
+            percent = (total / grand_total) * 100 if grand_total > 0 else 0
+            if percent >= 100:
+                percent_str = "100%"
+            elif percent >= 10:
+                percent_str = f"{percent:4.1f}%"
+            else:
+                percent_str = f"{percent:4.2f}%"
+            print(f"{percent_str} — {name}: {total_ms/intervals:.3f}ms total over {count/intervals} calls (avg {avg_ms/intervals:.3f}ms)")
+
+        _profile_accumulators.clear()
+        print("\\\\\\\\\\\\\\\\==== Report End   ====////////")
+
+    @staticmethod
+    def timed(name=""):
+        def wrapper(fn):
+            def inner(*args, **kwargs):
+                label = name or fn.__name__
+                label = "f:" + label
+                start = time.perf_counter()
+                result = fn(*args, **kwargs)
+                elapsed = time.perf_counter() - start
+                if label not in _profile_accumulators:
+                    _profile_accumulators[label] = [0.0, 0, None]
+                _profile_accumulators[label][0] += elapsed
+                _profile_accumulators[label][1] += 1
+                return result
+            return inner
+        return wrapper
+
+    @staticmethod
+    def profile_start(name: str, n=60):
+        global frame_count
+        if frame_count % n == 0:
+            _profile_timers[name] = time.perf_counter()
+
+    @staticmethod
+    def profile_end(name: str, n=60):
+        global frame_count
+        if frame_count % n == 0:
+            if name in _profile_timers:
+                elapsed = (time.perf_counter() - _profile_timers.pop(name)) * 1000
+                print(f"{name}: {elapsed:.3f}ms")
+            else:
+                print(f"Warning: profile_end called for '{name}' without matching profile_start")
 
 class Object:
     def __init__(self, vertices, faces):
         self.vertices = vertices
         self.faces = faces
 
-def profile_accumulate_start(name: str):
-    if name not in _profile_accumulators:
-        _profile_accumulators[name] = [0.0, 0, None]  # [total_time, count, start_time]
-    _profile_accumulators[name][2] = time.perf_counter()  # Reset start time
 
-def profile_accumulate_end(name: str):
-    if name not in _profile_accumulators or _profile_accumulators[name][2] is None:
-        return  # ignore unmatched end
-    start = _profile_accumulators[name][2]
-    elapsed = time.perf_counter() - start
-    _profile_accumulators[name][0] += elapsed
-    _profile_accumulators[name][1] += 1
-    _profile_accumulators[name][2] = None  # clear start
-
-def profile_accumulate_report(intervals=1):
-    print("\n////////==== Report Start ====\\\\\\\\\\\\\\\\")
-    grand_total = sum(total for total, count, _ in _profile_accumulators.values())
-
-    # Sort keys: normal entries first (alphabetical), then those starting with "f:"
-    sorted_items = sorted(_profile_accumulators.items(), key=lambda x: (x[0].startswith("f:"), x[0]))
-
-    for name, (total, count, _) in sorted_items:
-        if count == 0:
-            continue
-        total_ms = total * 1000
-        avg_ms = (total / (count / intervals)) * 1000
-        percent = (total / grand_total) * 100 if grand_total > 0 else 0
-        if percent >= 100:
-            percent_str = "100%"
-        elif percent >= 10:
-            percent_str = f"{percent:4.1f}%"
-        else:
-            percent_str = f"{percent:4.2f}%"
-        print(f"{percent_str} — {name}: {total_ms/intervals:.3f}ms total over {count/intervals} calls (avg {avg_ms/intervals:.3f}ms)")
-
-    _profile_accumulators.clear()
-    print("\\\\\\\\\\\\\\\\==== Report End   ====////////")
-
-def timed(name=""):
-    def wrapper(fn):
-        def inner(*args, **kwargs):
-            label = name or fn.__name__
-            label = "f:" + label
-            start = time.perf_counter()
-            result = fn(*args, **kwargs)
-            elapsed = time.perf_counter() - start
-            if label not in _profile_accumulators:
-                _profile_accumulators[label] = [0.0, 0, None]
-            _profile_accumulators[label][0] += elapsed
-            _profile_accumulators[label][1] += 1
-            return result
-        return inner
-    return wrapper
-
-
-def profile_start(name: str, n=60):
-    global frame_count
-    if frame_count % n == 0:
-        _profile_timers[name] = time.perf_counter()
-
-def profile_end(name: str, n=60):
-    global frame_count
-    if frame_count % n == 0:
-        if name in _profile_timers:
-            elapsed = (time.perf_counter() - _profile_timers.pop(name)) * 1000
-            print(f"{name}: {elapsed:.3f}ms")
-        else:
-            print(f"Warning: profile_end called for '{name}' without matching profile_start")
 
 def load_obj(filepath):
     vertices = []
@@ -146,7 +151,7 @@ def load_obj(filepath):
                 triangles.append(tuple(face))
 
     return Object(vertices, triangles)
-@timed()
+
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
 
@@ -159,19 +164,19 @@ def get_projection_matrix(fov, aspect, near, far):
     proj[2,3] = (2 * far * near) / (near - far)
     proj[3,2] = -1
     return proj
-@timed()
+
 def rotation_matrix_x(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[1, 0, 0],
                     [0, c, -s],
                     [0, s,  c]])
-@timed()
+
 def rotation_matrix_y(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[ c, 0, s],
                     [ 0, 1, 0],
                     [-s, 0, c]])
-@timed()
+
 def rotation_matrix_z(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[c, -s, 0],
@@ -188,7 +193,7 @@ def normalize_obj_vertices(vertices):
     return (v - center) / scale
 
 class Renderer:
-    def __init__(self, width: int = 800, height: int = 800, grid_size: int = 100) -> None:
+    def __init__(self, width: int = 900, height: int = 900, grid_size: int = 150) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -224,7 +229,7 @@ class Renderer:
         self.bresenhams_algorithm_draw_line(start, end, color)
 
     # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
-    @timed()
+    @Profiler.timed()
     def bresenhams_algorithm_draw_line(self, start, end, color):
         is_x_flipped = False  # for handling slope < 0
         is_x_dominant_axis = False  # for handling slope > 1
@@ -281,7 +286,7 @@ class Renderer:
                 p += 2 * (dy - dx)
                 y += 1
 
-    @timed()
+    @Profiler.timed()
     def draw_square(self, top_left: Tuple[int, int], size: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             pygame.draw.rect(self.screen, color, (*top_left, size, size))
@@ -291,7 +296,7 @@ class Renderer:
                 if self._is_bounded((x, y)):
                     self.rgb_buffer[y][x] = color
 
-    @timed()
+    @Profiler.timed()
     def draw_pixel(self, position: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             self.screen.set_at(position, color)
@@ -300,7 +305,7 @@ class Renderer:
         if self._is_bounded((x,y)):
             self.rgb_buffer[y][x] = color
 
-    @timed()
+    @Profiler.timed()
     def draw_circle(self, center: Tuple[int, int], radius: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
         if PASSTHROUGH:
             pygame.draw.circle(self.screen, color, center, radius)
@@ -313,10 +318,11 @@ class Renderer:
                     self.rgb_buffer[y][x] = color
 
     # 500x500 triangles cost 0.8ms to draw (not great)
-    @timed()
+    @Profiler.timed()
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
-            pygame.draw.polygon(self.screen, color, [p1, p2, p3])
+            pygame.draw.polygon(self.screen, color, [p1[:2], p2[:2], p3[:2]])
+            return
         
         def edge(a, b, c):
             # Returns twice the signed area of triangle abc
@@ -372,7 +378,7 @@ class Renderer:
                 w1 += dw1_dx
                 w2 += dw2_dx
 
-    @timed()
+    @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
         if PASSTHROUGH:
             pygame.draw.lines(self.screen, color, True, [p1, p2, p3])
@@ -381,9 +387,9 @@ class Renderer:
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
 
-    @timed()
+    @Profiler.timed()
     def draw_polygons(self):
-        profile_accumulate_start("draw_polygons: pre_compute")
+        Profiler.profile_accumulate_start("draw_polygons: pre_compute")
         # === Setup ===
         if CONUTER_CLOCKWISE_TRIANGLES:
             light = np.array([0, -1, 0]) # for some reason I have to flip the light direction when the triangles are different
@@ -475,7 +481,10 @@ class Renderer:
         z = tri_ndc_all[:, :, 2]    # (F, 3)
 
         # Convert x, y to screen coordinates
-        grid = self.grid_size
+        if PASSTHROUGH:
+            grid = self.width
+        else:
+            grid = self.grid_size
         xy_screen = np.empty_like(xy)
         xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid).astype(int)
         xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid).astype(int)
@@ -483,47 +492,36 @@ class Renderer:
         # Combine x, y, z back
         tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
 
-        profile_accumulate_end("draw_polygons: pre_compute")
-        profile_accumulate_start("draw_polygons: project_and_draw")
-        for i, face in enumerate(valid_faces_idx):
-            profile_accumulate_start("draw_polygons: project_and_draw: project")
-            profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
+        Profiler.profile_accumulate_end("draw_polygons: pre_compute")
+        Profiler.profile_accumulate_start("draw_polygons: project_and_draw")
+        # Backface culling seems a bit inaccurate right now
+        # for i, face in enumerate(valid_faces_idx):
+        for i, face in enumerate(faces):
+            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
+            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
             # === Frustum near-plane culling using clip.w (approximated here) ===
             if any(V_clip[j][3] <= 0 for j in faces[i]):
-                profile_accumulate_end("draw_polygons: project_and_draw: project")
-                profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
+                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
+                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
                 continue
-            profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
-            # === NDC Space ===
-            tri_ndc = tri_ndc_all[i]
-            
-            # Seems to only marginally increase performance
-            BACKFACE_CULLING = True
-            if BACKFACE_CULLING:
-                profile_accumulate_start("draw_polygons: project_and_draw: project: backface culling")
-                # === Backface culling ===
-                if CONUTER_CLOCKWISE_TRIANGLES:
-                    profile_accumulate_end("draw_polygons: project_and_draw: project")
-                    profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
-                    continue
-                profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
+            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
 
             # apply light to this face
             color = color_all[i]
 
             # === Convert to screen space ===
             tri_screen = tri_screen_all[i]
-            profile_accumulate_end("draw_polygons: project_and_draw: project")
-            profile_accumulate_start("draw_polygons: project_and_draw: draw")
+            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
+            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: draw")
             if draw_faces or draw_z_buffer:
                 self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
             if draw_lines:
                 self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
-            profile_accumulate_end("draw_polygons: project_and_draw: draw")
-        profile_accumulate_end("draw_polygons: project_and_draw")
+            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: draw")
+        Profiler.profile_accumulate_end("draw_polygons: project_and_draw")
 
 
-    @timed("render_buffer")
+    @Profiler.timed("render_buffer")
     def render_buffer(self):
         global draw_z_buffer  # Toggle this to enable/disable Z buffer debug view
         # DEBUG_Z_MIN = -100  # how close we can see
@@ -564,40 +562,8 @@ class Renderer:
             frame_count += 1  # start of the next frame
             self.screen.fill((0, 0, 0))
 
-            # Drawing demo here
             if True:
-                # self.draw_line((0, 0), (self.width, self.height), (255, 0, 0))
-                # self.draw_square((50, 50), 100, (0, 255, 0))
-                # self.draw_pixel((0, 0), COLOR_RED)
-                # self.draw_pixel((1, 1), COLOR_BLUE)
-                # self.draw_pixel((1, 0), COLOR_GREEN)
-                # self.draw_line((6, 6), (11, 8), COLOR_GREEN)
-                # self.draw_line((2, 2), (5, 5), COLOR_WHITE)
-                # self.draw_square((10,10), 5, COLOR_WHITE)
-                # self.draw_circle((20, 8), 8, COLOR_GREEN)
-                # self.fill_triangle((1*2, 12*2), (8*2, 9*2), (18*2, 15*2), COLOR_RED)
-                # self.draw_polygons_2d()
                 self.draw_polygons()
-                
-                # Spinning line (10px long from center)
-                # cx, cy = self.grid_size // 2, self.grid_size // 2
-                # length = 20
-                # global angle
-                # x2 = int(cx + length * math.cos(angle))
-                # y2 = int(cy + length * math.sin(angle))
-                # self.draw_line((cx, cy), (x2, y2), COLOR_WHITE)
-                
-                # angle += 0.01
-                
-                # Polygon follows mouse, left click cycles which point is moved
-                if not hasattr(self, "poly_points"):
-                    cx, cy = self.grid_size // 2, self.grid_size // 2
-                    self.poly_points = [
-                        [cx - 10, cy - 5],
-                        [cx + 10, cy - 5],
-                        [cx, cy + 10]
-                    ]
-                    self.active_point = 0
 
                 mx, my = pygame.mouse.get_pos()
                 
@@ -608,32 +574,11 @@ class Renderer:
                 mouse_x = mx
                 global mouse_y
                 mouse_y = my
-                
-                # Move the active point to mouse position
-                # self.poly_points[self.active_point][0] = mx
-                # self.poly_points[self.active_point][1] = my
-
-                # # Draw the polygon
-                # self.fill_triangle(
-                #     (self.poly_points[0][0], self.poly_points[0][1]),
-                #     (self.poly_points[1][0], self.poly_points[1][1]),
-                #     (self.poly_points[2][0], self.poly_points[2][1]),
-                #     COLOR_WHITE
-                # )
-
-                # # Draw points for visual feedback
-                # for idx, pt in enumerate(self.poly_points):
-                #     color = COLOR_RED if idx == self.active_point else COLOR_BLUE
-                #     self.draw_square((pt[0], pt[1]), 2, color)
 
                 # Handle mouse click to cycle active point
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         self.running = False
-                    elif event.type == pygame.MOUSEBUTTONDOWN:
-                        if event.button == 1:  # Left click
-                            # self.active_point = (self.active_point + 1) % 3
-                            print(self.poly_points)
                     # ====== Camera rotation stuff ======
                     if event.type == pygame.MOUSEBUTTONDOWN:
                             if event.button == 1:  # Left click
@@ -693,7 +638,7 @@ class Renderer:
                 self.render_buffer()
             
             if frame_count % 60 == 0:
-                profile_accumulate_report(intervals=60)
+                Profiler.profile_accumulate_report(intervals=60)
             
             # Clear the RGB buffer for the next frame
             self.rgb_buffer[:] = [50, 50, 120]
