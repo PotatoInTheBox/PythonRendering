@@ -16,7 +16,6 @@ import numpy as np
 if sys.platform == "win32":
     ctypes.windll.user32.SetProcessDPIAware()
 
-PASSTHROUGH = False # Toggle between passthrough and simulated draw
 DRAW_PIXEL_BORDER = True  # Toggle to draw a border around pixels
 PIXEL_BORDER_SIZE = 1  # Size of the pixel border
 
@@ -44,6 +43,11 @@ START_DISTANCE = 4.0
 CAMERA_SPEED = 0.1
 FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 frame_count = 0  # count frames rendered so far
+
+FOV=90  # In degrees, how much can the camera see from left to right?
+SCREEN_WIDTH = 900  # How much width should the window have?
+SCREEN_HEIGHT = 450  # How much height should the window have?
+GRID_CELL_SIZE = 7  # How many pixels big is each raster cell?
 
 # Accumulates total time spent in named segments
 _profile_accumulators = {}
@@ -193,17 +197,19 @@ def normalize_obj_vertices(vertices):
     return (v - center) / scale
 
 class Renderer:
-    def __init__(self, width: int = 900, height: int = 900, grid_size: int = 150) -> None:
+    def __init__(self, width: int = 900, height: int = 450, grid_size_x: int = 150, grid_size_y: int = 75) -> None:
         pygame.init()
         self.width, self.height = width, height
-        self.grid_size = grid_size
-        self.cell_size = width // grid_size
+        self.grid_size_x = grid_size_x
+        self.grid_size_y = grid_size_y
+        self.cell_size_x = width // grid_size_x
+        self.cell_size_y = height // grid_size_y
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("Renderer")
         self.clock = pygame.time.Clock()
         self.running = True
-        self.rgb_buffer = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
-        self.z_buffer = np.full((self.grid_size, self.grid_size), -np.inf, dtype=np.float32)
+        self.rgb_buffer = np.zeros((self.grid_size_y, self.grid_size_x, 3), dtype=np.uint8)
+        self.z_buffer = np.full((self.grid_size_y, self.grid_size_x), -np.inf, dtype=np.float32)
 
         self.object = load_obj(OBJ_PATH)
         self.object.vertices = normalize_obj_vertices(self.object.vertices)
@@ -216,16 +222,13 @@ class Renderer:
         # The camera is facing towards positive z.
         self.camera_rot = [0.0,0.0,0]
         self.camera_speed = CAMERA_SPEED
-        self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.1,far=1000)
+        self.projection_matrix = get_projection_matrix(fov=np.radians(FOV),aspect=self.grid_size_x/self.grid_size_y,near=0.1,far=1000)
 
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
-        return 0 <= x < self.grid_size and 0 <= y < self.grid_size
+        return 0 <= x < self.grid_size_x and 0 <= y < self.grid_size_y
 
     def draw_line(self, start: Tuple[int, int], end: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED, width: int = 1) -> None:
-        if PASSTHROUGH:
-            pygame.draw.line(self.screen, color, start, end, width)
-            return
         self.bresenhams_algorithm_draw_line(start, end, color)
 
     # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
@@ -288,9 +291,6 @@ class Renderer:
 
     @Profiler.timed()
     def draw_square(self, top_left: Tuple[int, int], size: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
-        if PASSTHROUGH:
-            pygame.draw.rect(self.screen, color, (*top_left, size, size))
-            return
         for y in range(top_left[1], top_left[1] + size):
             for x in range(top_left[0], top_left[0] + size):
                 if self._is_bounded((x, y)):
@@ -298,19 +298,12 @@ class Renderer:
 
     @Profiler.timed()
     def draw_pixel(self, position: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED) -> None:
-        if PASSTHROUGH:
-            self.screen.set_at(position, color)
-            return
         x, y = position
         if self._is_bounded((x,y)):
             self.rgb_buffer[y][x] = color
 
     @Profiler.timed()
     def draw_circle(self, center: Tuple[int, int], radius: int, color: Tuple[int, int, int] = COLOR_RED) -> None:
-        if PASSTHROUGH:
-            pygame.draw.circle(self.screen, color, center, radius)
-            return
-
         sqrt_limit = radius**2
         for y in range(center[1] - radius, center[1] + radius):
             for x in range(center[0] - radius, center[0] + radius):
@@ -320,10 +313,6 @@ class Renderer:
     # 500x500 triangles cost 0.8ms to draw (not great)
     @Profiler.timed()
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
-        if PASSTHROUGH:
-            pygame.draw.polygon(self.screen, color, [p1[:2], p2[:2], p3[:2]])
-            return
-        
         def edge(a, b, c):
             # Returns twice the signed area of triangle abc
             return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
@@ -334,9 +323,9 @@ class Renderer:
         inv_area = 1/ area
 
         min_x = int(max(min(p1[0], p2[0], p3[0]), 0))
-        max_x = int(min(max(p1[0], p2[0], p3[0]), self.grid_size - 1))
+        max_x = int(min(max(p1[0], p2[0], p3[0]), self.grid_size_x - 1))
         min_y = int(max(min(p1[1], p2[1], p3[1]), 0))
-        max_y = int(min(max(p1[1], p2[1], p3[1]), self.grid_size - 1))
+        max_y = int(min(max(p1[1], p2[1], p3[1]), self.grid_size_y - 1))
         
         # Compute edge coefficients for: E(x, y) = A*x + B*y + C
         def edge_coeffs(p1, p2):
@@ -380,9 +369,6 @@ class Renderer:
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
-        if PASSTHROUGH:
-            pygame.draw.lines(self.screen, color, True, [p1, p2, p3])
-            return
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
@@ -481,13 +467,11 @@ class Renderer:
         z = tri_ndc_all[:, :, 2]    # (F, 3)
 
         # Convert x, y to screen coordinates
-        if PASSTHROUGH:
-            grid = self.width
-        else:
-            grid = self.grid_size
+        grid_x = self.grid_size_x
+        grid_y = self.grid_size_y
         xy_screen = np.empty_like(xy)
-        xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid).astype(int)
-        xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid).astype(int)
+        xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid_x).astype(int)
+        xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid_y).astype(int)
 
         # Combine x, y, z back
         tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
@@ -550,10 +534,10 @@ class Renderer:
 
         if DRAW_PIXEL_BORDER:
             pixel_border_color = COLOR_DARK_GRAY
-            for x in range(self.grid_size):
-                pygame.draw.line(self.screen, pixel_border_color, (x * self.cell_size, 0), (x * self.cell_size, self.height), PIXEL_BORDER_SIZE)
-            for y in range(self.grid_size):
-                pygame.draw.line(self.screen, pixel_border_color, (0, y * self.cell_size), (self.width, y * self.cell_size), PIXEL_BORDER_SIZE)
+            for x in range(self.grid_size_x):
+                pygame.draw.line(self.screen, pixel_border_color, (x * self.cell_size_x, 0), (x * self.cell_size_x, self.height), PIXEL_BORDER_SIZE)
+            for y in range(self.grid_size_x):
+                pygame.draw.line(self.screen, pixel_border_color, (0, y * self.cell_size_y), (self.width, y * self.cell_size_y), PIXEL_BORDER_SIZE)
 
     def run(self):
         
@@ -567,8 +551,8 @@ class Renderer:
 
                 mx, my = pygame.mouse.get_pos()
                 
-                mx //= self.cell_size
-                my //= self.cell_size
+                mx //= self.cell_size_x
+                my //= self.cell_size_y
 
                 global mouse_x
                 mouse_x = mx
@@ -634,8 +618,7 @@ class Renderer:
                     move_world = R_cam @ move_dir
                     self.camera_pos += move_world
 
-            if not PASSTHROUGH:
-                self.render_buffer()
+            self.render_buffer()
             
             if frame_count % 60 == 0:
                 Profiler.profile_accumulate_report(intervals=60)
@@ -650,7 +633,7 @@ class Renderer:
         pygame.quit()
 
 if __name__ == "__main__":
-    renderer = Renderer()
+    renderer = Renderer(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH//GRID_CELL_SIZE, SCREEN_HEIGHT//GRID_CELL_SIZE)
     renderer.run()
 
 # NOTE ChatGPT (4o for general templates) and Copilot (internally using GPT-4.1) was used in this project.
