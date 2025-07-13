@@ -38,6 +38,10 @@ COLOR_WHITE = (255, 255, 255)
 COLOR_DARK_GRAY = (50, 50, 50)
 COLOR_PINK = (255, 105, 180)
 
+OBJ_PATH = "./models/utahTeapot.obj"
+CONUTER_CLOCKWISE_TRIANGLES = False
+START_DISTANCE = 4.0
+CAMERA_SPEED = 0.1
 FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 frame_count = 0  # count frames rendered so far
 
@@ -46,9 +50,13 @@ _profile_accumulators = {}
 # keep track of our named profilers
 _profile_timers = {}
 
-OBJ_PATH = "./models/teapot.obj"
-CONUTER_CLOCKWISE_TRIANGLES = True
-START_DISTANCE = 100.0
+
+
+
+class Object:
+    def __init__(self, vertices, faces):
+        self.vertices = vertices
+        self.faces = faces
 
 def profile_accumulate_start(name: str):
     if name not in _profile_accumulators:
@@ -128,10 +136,13 @@ def load_obj(filepath):
             if parts[0] == 'v':
                 vertices.append(tuple(map(float, parts[1:4])))
             elif parts[0] == 'f':
-                face = [int(p.split('/')[0]) - 1 for p in parts[1:4]]
+                face = []
+                for p in parts[1:4]:
+                    v = p.split('/')[0]  # Always use the first part (vertex index)
+                    face.append(int(v) - 1)
                 triangles.append(tuple(face))
 
-    return vertices, triangles
+    return Object(vertices, triangles)
 @timed()
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
@@ -164,6 +175,15 @@ def rotation_matrix_z(theta):
                     [s,  c, 0],
                     [0,  0, 1]])
 
+# At startup we conver the verticies to values between -1 and 1.
+def normalize_obj_vertices(vertices):
+    v = np.array(vertices)  # Shape: (N, 3)
+    min_vals = v.min(axis=0)
+    max_vals = v.max(axis=0)
+    center = (min_vals + max_vals) / 2
+    scale = (max_vals - min_vals).max() / 2
+    return (v - center) / scale
+
 class Renderer:
     def __init__(self, width: int = 800, height: int = 800, grid_size: int = 200) -> None:
         pygame.init()
@@ -193,9 +213,9 @@ class Renderer:
             [(65, 25), (70, 30), (60, 35)],
             [(22, 40), (28, 45), (24, 50)],
         ]
-        
-        utah_teapot = load_obj(OBJ_PATH)
-        self.object = utah_teapot
+
+        self.object = load_obj(OBJ_PATH)
+        self.object.vertices = normalize_obj_vertices(self.object.vertices)
         
         # The camera will need to face -z. So we need to push the camera towards positive z.
         # This is because our object will be at 0.
@@ -204,7 +224,7 @@ class Renderer:
         self.last_mouse_pos = (0, 0)
         # The camera is facing towards positive z.
         self.camera_rot = [0.0,0.0,0]
-        self.camera_speed = 1.0
+        self.camera_speed = CAMERA_SPEED
         self.projection_matrix = get_projection_matrix(fov=np.radians(90),aspect=1,near=0.1,far=1000)
 
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
@@ -374,7 +394,7 @@ class Renderer:
         self.draw_line(p3, p1, color)
 
     @timed()
-    def draw_polygons(self, scale=1, offset=(0, 0)):
+    def draw_polygons(self):
         profile_accumulate_start("draw_polygons: pre_compute")
         # === Setup ===
         if CONUTER_CLOCKWISE_TRIANGLES:
@@ -418,7 +438,7 @@ class Renderer:
         # -> normalized device coordinates (ndc) space 
         # -> screen space
         
-        vertex_list = self.object[0]
+        vertex_list = self.object.vertices
         
         # Assuming: vertex_list = [(x, y, z), ...]
         V = np.array(vertex_list)  # Shape: (N, 3)
@@ -450,9 +470,9 @@ class Renderer:
         # Perspective divide
         V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
         
-        faces = np.array(self.object[1])  # Shape (F, 3)
+        faces = np.array(self.object.faces)  # Shape (F, 3)
         tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
-        vertices = np.array(self.object[0])  # Shape (V, 3)
+        vertices = np.array(self.object.vertices)  # Shape (V, 3)
 
         tri_world_all = vertices[faces]  # Shape (F, 3, 3)
 
@@ -492,8 +512,8 @@ class Renderer:
             # === Convert to screen space ===
             tri_screen = [
                 (
-                    int((v[0] + 1) * 0.5 * self.grid_size * scale + offset[0]),
-                    int((1 - (v[1] + 1) * 0.5) * self.grid_size * scale + offset[1]),
+                    int((v[0] + 1) * 0.5 * self.grid_size),
+                    int((1 - (v[1] + 1) * 0.5) * self.grid_size),
                     v[2]  # keep depth
                 )
                 for v in tri_ndc
