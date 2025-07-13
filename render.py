@@ -334,6 +334,15 @@ class Renderer:
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
         if PASSTHROUGH:
             pygame.draw.polygon(self.screen, color, [p1, p2, p3])
+        
+        def edge(a, b, c):
+            # Returns twice the signed area of triangle abc
+            return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
+        
+        area = edge(p1, p2, p3)  # Precompute this outside the loop
+        if area == 0:
+            return  # skip degenerate triangle
+        inv_area = 1/ area
 
         min_x = int(max(min(p1[0], p2[0], p3[0]), 0))
         max_x = int(min(max(p1[0], p2[0], p3[0]), self.grid_size - 1))
@@ -361,27 +370,19 @@ class Renderer:
             dw0_dx = A0
             dw1_dx = A1
             dw2_dx = A2
-
-            def edge(a, b, c):
-                # Returns twice the signed area of triangle abc
-                return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
-            area = edge(p1, p2, p3)  # Precompute this outside the loop
-            if area == 0:
-                return  # skip degenerate triangle
+            
+            # Normalize barycentric coordinates
+            alpha = w0 * inv_area
+            beta = w1 * inv_area
+            gamma = w2 * inv_area
+            
+            # Interpolate Z
+            z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
             
             for x in range(min_x, max_x + 1):
-                # Accept both types of faces. Can be optimized if only one is supported
                 if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    # Normalize barycentric coordinates
-                    alpha = w0 / area
-                    beta = w1 / area
-                    gamma = w2 / area
-
-                    # Interpolate Z
-                    z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
                     if z > self.z_buffer[y, x]:
                         self.rgb_buffer[y, x] = color
-                        # Do a dumb interpolation (won't work for different perspectives)
                         self.z_buffer[y, x] = z
                 w0 += dw0_dx
                 w1 += dw1_dx
@@ -470,6 +471,33 @@ class Renderer:
         
         # precompute colors of all faces
         color_all = (brightness_all[:, None] * COLOR_WHITE).astype(int)
+        
+        # Precompute frustrum culling
+        # faces: (F, 3), V_clip: (V, 4)
+        w_vals = V_clip[:, 3]  # (V,)
+
+        # Gather w components per face vertex
+        w_faces = w_vals[faces]  # (F, 3)
+
+        # Check if any w <= 0 per face (near-plane culling)
+        mask = np.any(w_faces <= 0, axis=1)  # (F,) True if face is culled
+
+        # Cull faces upfront
+        valid_faces_idx = np.nonzero(~mask)[0]
+        
+        # Precompute screen space
+        # Extract x, y, z (NDC space)
+        xy = tri_ndc_all[:, :, :2]  # (F, 3, 2)
+        z = tri_ndc_all[:, :, 2]    # (F, 3)
+
+        # Convert x, y to screen coordinates
+        grid = self.grid_size
+        xy_screen = np.empty_like(xy)
+        xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid).astype(int)
+        xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid).astype(int)
+
+        # Combine x, y, z back
+        tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
 
         profile_accumulate_end("draw_polygons: pre_compute")
         profile_accumulate_start("draw_polygons: project_and_draw")
@@ -485,32 +513,22 @@ class Renderer:
             # === NDC Space ===
             tri_ndc = tri_ndc_all[i]
             
-            profile_accumulate_start("draw_polygons: project_and_draw: project: backface culling")
-            # === Backface culling ===
-            a = tri_ndc[1][:2] - tri_ndc[0][:2]
-            b = tri_ndc[2][:2] - tri_ndc[0][:2]
-            screen_normal_z = a[0]*b[1] - a[1]*b[0]
-            facing_camera = screen_normal_z < 0
-            if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
-                profile_accumulate_end("draw_polygons: project_and_draw: project")
+            # Seems to only marginally increase performance
+            BACKFACE_CULLING = False
+            if BACKFACE_CULLING:
+                profile_accumulate_start("draw_polygons: project_and_draw: project: backface culling")
+                # === Backface culling ===
+                if valid_faces_idx[i] != CONUTER_CLOCKWISE_TRIANGLES:
+                    profile_accumulate_end("draw_polygons: project_and_draw: project")
+                    profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
+                    continue
                 profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
-                continue
-            profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
 
             # apply light to this face
             color = color_all[i]
 
-            profile_accumulate_start("draw_polygons: project_and_draw: project: screenspace conversion")
             # === Convert to screen space ===
-            tri_screen = [
-                (
-                    int((v[0] + 1) * 0.5 * self.grid_size),
-                    int((1 - (v[1] + 1) * 0.5) * self.grid_size),
-                    v[2]  # keep depth
-                )
-                for v in tri_ndc
-            ]
-            profile_accumulate_end("draw_polygons: project_and_draw: project: screenspace conversion")
+            tri_screen = tri_screen_all[i]
             profile_accumulate_end("draw_polygons: project_and_draw: project")
             profile_accumulate_start("draw_polygons: project_and_draw: draw")
             if draw_faces or draw_z_buffer:
