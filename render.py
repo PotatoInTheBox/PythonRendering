@@ -409,8 +409,14 @@ class Renderer:
         # * Object space (won't deal with yet, treat it as world space, possibly going to apply scaling, transorms, and rotations in the future)
         # * World space (assume this is the start)
         # * View Space (rotated and transformed relative to the camera)
-        # * Perspective Space (perspective transformation applied)
-        # * Clip Space (???)
+        # * Clip Space (perspective transformation applied)
+        # * Normalized Device Coordinates (NDC) space (perspective divided by w)
+        # obj space 
+        # -> world space 
+        # -> view space 
+        # -> clip space 
+        # -> normalized device coordinates (ndc) space 
+        # -> screen space
         
         vertex_list = self.object[0]
         
@@ -443,18 +449,24 @@ class Renderer:
 
         # Perspective divide
         V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
+        
+        faces = np.array(self.object[1])  # Shape (F, 3)
+        tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
+        vertices = np.array(self.object[0])  # Shape (V, 3)
+
+        tri_world_all = vertices[faces]  # Shape (F, 3, 3)
 
         profile_accumulate_start("draw_polygons: project_and_draw")
-        for face_index in self.object[1]:
+        for i in range(len(faces)):
             profile_accumulate_start("draw_polygons: project_and_draw: project")
   
-            # === Use precomputed projected verts ===
-            tri_ndc = [V_ndc[i] for i in face_index]
-            
             # === Frustum near-plane culling using clip.w (approximated here) ===
-            if any(V_clip[i][3] <= 0 for i in face_index):
+            if any(V_clip[j][3] <= 0 for j in faces[i]):
                 profile_accumulate_end("draw_polygons: project_and_draw: project")
                 continue
+            
+            # === NDC Space ===
+            tri_ndc = tri_ndc_all[i]
             
             # === Backface culling ===
             a = tri_ndc[1][:2] - tri_ndc[0][:2]
@@ -466,7 +478,7 @@ class Renderer:
                 continue
 
             # === World-space triangle ===
-            tri_world = [np.array(self.object[0][i]) for i in face_index]
+            tri_world = tri_world_all[i]
 
             # === Compute face normal ===
             a = tri_world[1] - tri_world[0]
