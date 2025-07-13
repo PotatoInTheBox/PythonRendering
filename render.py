@@ -6,19 +6,68 @@
 # (the renderer can toggle between passthrough mode, where it uses the original drawing methods,
 # and simulated mode, where it updates an RGB buffer instead)
 
+import profiler
 from profiler import Profiler
+from renderable_object import RenderableObject
 
 import pygame
 import sys
 import ctypes
 import numpy as np
+from typing import List, Tuple
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
     ctypes.windll.user32.SetProcessDPIAware()
 
+# ========== Screen settings ==========
+SCREEN_WIDTH = 900  # How much width should the window have?
+SCREEN_HEIGHT = 450  # How much height should the window have?
+GRID_CELL_SIZE = 5  # How many pixels big is each raster cell?
+
+# ========== Camera settings ==========
+CAMERA_SPEED = 0.1
+START_DISTANCE = 4.0
+CAMERA_POSITION = [0.0,0.0,float(START_DISTANCE)]
+CAMERA_ROTATION = [0.0,0.0,0]
+FOV=90  # In degrees, how much can the camera see from left to right?
+
+# ========== Object initialization ==========
+MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
+NAME_OBJ = RenderableObject.load_new_obj("./models/name.obj")
+SHIP_OBJ = RenderableObject.load_new_obj("./models/ship.obj")
+
+MONKEY_OBJ.transform.set_translation([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
+NAME_OBJ.transform.set_translation([0,0,0])  # We will have this at the origin
+NAME_SCALE = 1.8
+NAME_OBJ.transform.set_scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
+SHIP_OBJ.transform.set_translation([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
+# Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
+
+RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ]  # all the objects we want rendered
+
+# ========== Performance metrics ==========
+ENABLE_PROFILER = False
+profiler.enabled_profiler = ENABLE_PROFILER
+FRAME_LOG_INTERVAL = 60  # log once per 60 frames
+
+# ========== Pixel outline effect ==========
 DRAW_PIXEL_BORDER = True  # Toggle to draw a border around pixels
 PIXEL_BORDER_SIZE = 1  # Size of the pixel border
 
+# ========== Common Colors ==========
+COLOR_BLACK = (0, 0, 0)
+COLOR_RED = (255, 0, 0)
+COLOR_GREEN = (0, 255, 0)
+COLOR_BLUE = (0, 0, 255)
+COLOR_WHITE = (255, 255, 255)
+COLOR_DARK_GRAY = (50, 50, 50)
+COLOR_PINK = (255, 105, 180)
+COLOR_SLATE_BLUE = (50, 50, 120)
+
+# ========== Rendering modes ==========
+CONUTER_CLOCKWISE_TRIANGLES = False
+
+# ========== Global variables ==========
 angle = 0
 
 mouse_x = 0
@@ -28,53 +77,7 @@ draw_z_buffer = False
 draw_faces = True
 draw_lines = False
 
-from typing import List, Tuple
-COLOR_BLACK = (0, 0, 0)
-COLOR_RED = (255, 0, 0)
-COLOR_GREEN = (0, 255, 0)
-COLOR_BLUE = (0, 0, 255)
-COLOR_WHITE = (255, 255, 255)
-COLOR_DARK_GRAY = (50, 50, 50)
-COLOR_PINK = (255, 105, 180)
-
-OBJ_PATH = "./models/blender_monkey.obj"
-CONUTER_CLOCKWISE_TRIANGLES = False
-START_DISTANCE = 4.0
-CAMERA_SPEED = 0.1
-FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 frame_count = 0  # count frames rendered so far
-
-FOV=90  # In degrees, how much can the camera see from left to right?
-SCREEN_WIDTH = 900  # How much width should the window have?
-SCREEN_HEIGHT = 450  # How much height should the window have?
-GRID_CELL_SIZE = 7  # How many pixels big is each raster cell?
-
-class Object:
-    def __init__(self, vertices, faces):
-        self.vertices = vertices
-        self.faces = faces
-
-
-
-def load_obj(filepath):
-    vertices = []
-    triangles = []
-
-    with open(filepath) as file:
-        for line in file:
-            if line.startswith('#') or not line.strip():
-                continue
-            parts = line.strip().split()
-            if parts[0] == 'v':
-                vertices.append(tuple(map(float, parts[1:4])))
-            elif parts[0] == 'f':
-                face = []
-                for p in parts[1:4]:
-                    v = p.split('/')[0]  # Always use the first part (vertex index)
-                    face.append(int(v) - 1)
-                triangles.append(tuple(face))
-
-    return Object(vertices, triangles)
 
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
@@ -107,42 +110,40 @@ def rotation_matrix_z(theta):
                     [s,  c, 0],
                     [0,  0, 1]])
 
-# At startup we conver the verticies to values between -1 and 1.
-def normalize_obj_vertices(vertices):
-    v = np.array(vertices)  # Shape: (N, 3)
-    min_vals = v.min(axis=0)
-    max_vals = v.max(axis=0)
-    center = (min_vals + max_vals) / 2
-    scale = (max_vals - min_vals).max() / 2
-    return (v - center) / scale
-
 class Renderer:
     def __init__(self, width: int = 900, height: int = 450, grid_size_x: int = 150, grid_size_y: int = 75) -> None:
-        pygame.init()
         self.width, self.height = width, height
         self.grid_size_x = grid_size_x
         self.grid_size_y = grid_size_y
         self.cell_size_x = width // grid_size_x
         self.cell_size_y = height // grid_size_y
-        self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("Renderer")
-        self.clock = pygame.time.Clock()
-        self.running = True
-        self.rgb_buffer = np.zeros((self.grid_size_y, self.grid_size_x, 3), dtype=np.uint8)
-        self.z_buffer = np.full((self.grid_size_y, self.grid_size_x), -np.inf, dtype=np.float32)
-
-        self.object = load_obj(OBJ_PATH)
-        self.object.vertices = normalize_obj_vertices(self.object.vertices)
+        self.create_empty_rgb_buffer()
+        self.create_empty_z_buffer()
         
         # The camera will need to face -z. So we need to push the camera towards positive z.
         # This is because our object will be at 0.
-        self.camera_pos = [0.0,0.0,float(START_DISTANCE)]
+        self.camera_pos = CAMERA_POSITION
         self.dragging = False
         self.last_mouse_pos = (0, 0)
         # The camera is facing towards positive z.
-        self.camera_rot = [0.0,0.0,0]
+        self.camera_rot = CAMERA_ROTATION
         self.camera_speed = CAMERA_SPEED
         self.projection_matrix = get_projection_matrix(fov=np.radians(FOV),aspect=self.grid_size_x/self.grid_size_y,near=0.1,far=1000)
+        # Load and create our object which we will render
+        self.objects = RENDER_OBJECTS
+        
+        pygame.init()
+        pygame.display.set_caption("Renderer")
+        self.screen = pygame.display.set_mode((width, height))
+        self.clock = pygame.time.Clock()
+        self.running = True
+    
+    def create_empty_rgb_buffer(self):
+        self.rgb_buffer = np.zeros((self.grid_size_y, self.grid_size_x, 3), dtype=np.uint8)
+        self.rgb_buffer[:] = COLOR_SLATE_BLUE
+    
+    def create_empty_z_buffer(self):
+        self.z_buffer = np.full((self.grid_size_y, self.grid_size_x), -np.inf, dtype=np.float32)
 
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
@@ -201,7 +202,7 @@ class Renderer:
             # undo "slope < 0" edge case
             out_y = out_y if not is_x_flipped else out_y * -1
 
-            self.draw_pixel((out_x, out_y), color)
+            self.draw_pixel((int(out_x), int(out_y)), color)
             x += 1
             if p < 0:
                 p += 2 * dy
@@ -295,134 +296,133 @@ class Renderer:
 
     @Profiler.timed()
     def draw_polygons(self):
-        Profiler.profile_accumulate_start("draw_polygons: pre_compute")
-        # === Setup ===
-        if CONUTER_CLOCKWISE_TRIANGLES:
-            light = np.array([0, -1, 0]) # for some reason I have to flip the light direction when the triangles are different
-            # I guess that kinda makes sense. I'm getting the normals of the triangle, which if counter clockwise, will lead
-            # to the triangle facing the opposite direction, and thus the light.
-            # TODO Let's instead just change the light calculations to invert in the normal being flipped.
-        else:
-            light = np.array([0, 1, 0]) # The light is pointing towards positive y. This means down for us.
+        for r_object in self.objects:
+            Profiler.profile_accumulate_start("draw_polygons: pre_compute")
+            # === Setup ===
+            if CONUTER_CLOCKWISE_TRIANGLES:
+                light = np.array([0, -1, 0]) # for some reason I have to flip the light direction when the triangles are different
+                # I guess that kinda makes sense. I'm getting the normals of the triangle, which if counter clockwise, will lead
+                # to the triangle facing the opposite direction, and thus the light.
+                # TODO Let's instead just change the light calculations to invert in the normal being flipped.
+            else:
+                light = np.array([0, 1, 0]) # The light is pointing towards positive y. This means down for us.
 
-        global angle
-        Rx = rotation_matrix_x(angle)
-        Ry = rotation_matrix_y(angle)
-        R = Ry @ Rx
+            global angle
+            Rx = rotation_matrix_x(angle)
+            Ry = rotation_matrix_y(angle)
+            R = Ry @ Rx
 
-        # R must be 4d in order to be used in the matrix
-        R_4d = np.eye(4)
-        R_4d[:3, :3] = R
+            # model_matrix = R_4d  # T @ R @ S
+            r_object.transform.set_rotation(R)
+            model_matrix = r_object.transform.get_matrix()
 
-        model_matrix = R_4d  # T @ R @ S
+            pitch, yaw, roll = self.camera_rot
+            Rx = rotation_matrix_x(pitch)
+            Ry = rotation_matrix_y(yaw)
+            Rz = rotation_matrix_z(roll)
+            R_cam = Rz @ Ry @ Rx  # camera rotation
+            R_view = R_cam.T  # inverse of rotation matrix is transpose
+            
+            # Assuming: vertex_list = [(x, y, z), ...]
+            V = np.array(r_object.vertices)  # Shape: (N, 3)
 
-        pitch, yaw, roll = self.camera_rot
-        Rx = rotation_matrix_x(pitch)
-        Ry = rotation_matrix_y(yaw)
-        Rz = rotation_matrix_z(roll)
-        R_cam = Rz @ Ry @ Rx  # camera rotation
-        R_view = R_cam.T  # inverse of rotation matrix is transpose
-        
-        # Assuming: vertex_list = [(x, y, z), ...]
-        V = np.array(self.object.vertices)  # Shape: (N, 3)
+            # Add homogeneous coordinate
+            V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
+            
+            # R_view must be 4d in order to be used in the matrix
+            R_view_4d = np.eye(4)
+            R_view_4d[:3, :3] = R_view
+            
+            # Translation to move world relative to camera
+            T_view = np.eye(4)
+            camera_pos = np.array(self.camera_pos)
+            T_view[:3, 3] = -camera_pos
+            
+            # View matrix = rotation * translation
+            view_matrix = R_view_4d @ T_view
 
-        # Add homogeneous coordinate
-        V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
-        
-        # R_view must be 4d in order to be used in the matrix
-        R_view_4d = np.eye(4)
-        R_view_4d[:3, :3] = R_view
-        
-        # Translation to move world relative to camera
-        T_view = np.eye(4)
-        camera_pos = np.array(self.camera_pos)
-        T_view[:3, 3] = -camera_pos
-        
-        # View matrix = rotation * translation
-        view_matrix = R_view_4d @ T_view
+            # Combine all transforms into a single 4x4 matrix
+            M = self.projection_matrix @ view_matrix @ model_matrix
 
-        # Combine all transforms into a single 4x4 matrix
-        M = self.projection_matrix @ view_matrix @ model_matrix
+            # Transform all vertices in one go
+            V_clip = (M @ V.T).T  # Shape: (N, 4)
 
-        # Transform all vertices in one go
-        V_clip = (M @ V.T).T  # Shape: (N, 4)
+            # Perspective divide
+            V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
+            
+            faces = np.array(r_object.faces)  # Shape (F, 3)
+            tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
 
-        # Perspective divide
-        V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
-        
-        faces = np.array(self.object.faces)  # Shape (F, 3)
-        tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
+            V_world = (model_matrix @ V.T).T[:, :3]  # apply model matrix, ignore w
+            tri_world_all = V_world[faces]
+            
+            # Precompute all normals of all faces
+            a = tri_world_all[:,1] - tri_world_all[:,0]  # (N, 3)
+            b = tri_world_all[:,2] - tri_world_all[:,0]  # (N, 3)
+            normals = np.cross(a, b)
+            normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
+            
+            # precompute the brightness of all faces
+            brightness_all = np.clip((normals @ light + 1) / 2, 0, 1)
+            
+            # precompute colors of all faces
+            color_all = (brightness_all[:, None] * COLOR_WHITE).astype(int)
+            
+            # Precompute frustrum culling
+            # faces: (F, 3), V_clip: (V, 4)
+            w_vals = V_clip[:, 3]  # (V,)
 
-        V_world = (model_matrix @ V.T).T[:, :3]  # apply model matrix, ignore w
-        tri_world_all = V_world[faces]
-        
-        # Precompute all normals of all faces
-        a = tri_world_all[:,1] - tri_world_all[:,0]  # (N, 3)
-        b = tri_world_all[:,2] - tri_world_all[:,0]  # (N, 3)
-        normals = np.cross(a, b)
-        normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
-        
-        # precompute the brightness of all faces
-        brightness_all = np.clip((normals @ light + 1) / 2, 0, 1)
-        
-        # precompute colors of all faces
-        color_all = (brightness_all[:, None] * COLOR_WHITE).astype(int)
-        
-        # Precompute frustrum culling
-        # faces: (F, 3), V_clip: (V, 4)
-        w_vals = V_clip[:, 3]  # (V,)
+            # Gather w components per face vertex
+            w_faces = w_vals[faces]  # (F, 3)
 
-        # Gather w components per face vertex
-        w_faces = w_vals[faces]  # (F, 3)
+            # Check if any w <= 0 per face (near-plane culling)
+            mask = np.any(w_faces <= 0, axis=1)  # (F,) True if face is culled
 
-        # Check if any w <= 0 per face (near-plane culling)
-        mask = np.any(w_faces <= 0, axis=1)  # (F,) True if face is culled
+            # Cull faces upfront
+            valid_faces_idx = np.nonzero(~mask)[0]
+            
+            # Precompute screen space
+            # Extract x, y, z (NDC space)
+            xy = tri_ndc_all[:, :, :2]  # (F, 3, 2)
+            z = tri_ndc_all[:, :, 2]    # (F, 3)
 
-        # Cull faces upfront
-        valid_faces_idx = np.nonzero(~mask)[0]
-        
-        # Precompute screen space
-        # Extract x, y, z (NDC space)
-        xy = tri_ndc_all[:, :, :2]  # (F, 3, 2)
-        z = tri_ndc_all[:, :, 2]    # (F, 3)
+            # Convert x, y to screen coordinates
+            grid_x = self.grid_size_x
+            grid_y = self.grid_size_y
+            xy_screen = np.empty_like(xy)
+            xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid_x).astype(int)
+            xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid_y).astype(int)
 
-        # Convert x, y to screen coordinates
-        grid_x = self.grid_size_x
-        grid_y = self.grid_size_y
-        xy_screen = np.empty_like(xy)
-        xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid_x).astype(int)
-        xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid_y).astype(int)
+            # Combine x, y, z back
+            tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
 
-        # Combine x, y, z back
-        tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
-
-        Profiler.profile_accumulate_end("draw_polygons: pre_compute")
-        Profiler.profile_accumulate_start("draw_polygons: project_and_draw")
-        # Backface culling seems a bit inaccurate right now
-        # for i, face in enumerate(valid_faces_idx):
-        for i, face in enumerate(faces):
-            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
-            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
-            # === Frustum near-plane culling using clip.w (approximated here) ===
-            if any(V_clip[j][3] <= 0 for j in faces[i]):
-                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
+            Profiler.profile_accumulate_end("draw_polygons: pre_compute")
+            Profiler.profile_accumulate_start("draw_polygons: project_and_draw")
+            # Backface culling seems a bit inaccurate right now
+            # for i, face in enumerate(valid_faces_idx):
+            for i, face in enumerate(faces):
+                Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
+                Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
+                # === Frustum near-plane culling using clip.w (approximated here) ===
+                if any(V_clip[j][3] <= 0 for j in faces[i]):
+                    Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
+                    Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
+                    continue
                 Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
-                continue
-            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
 
-            # apply light to this face
-            color = color_all[i]
+                # apply light to this face
+                color = color_all[i]
 
-            # === Convert to screen space ===
-            tri_screen = tri_screen_all[i]
-            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
-            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: draw")
-            if draw_faces or draw_z_buffer:
-                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
-            if draw_lines:
-                self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
-            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: draw")
-        Profiler.profile_accumulate_end("draw_polygons: project_and_draw")
+                # === Convert to screen space ===
+                tri_screen = tri_screen_all[i]
+                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
+                Profiler.profile_accumulate_start("draw_polygons: project_and_draw: draw")
+                if draw_faces or draw_z_buffer:
+                    self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
+                if draw_lines:
+                    self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
+                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: draw")
+            Profiler.profile_accumulate_end("draw_polygons: project_and_draw")
 
 
     @Profiler.timed("render_buffer")
@@ -544,8 +544,10 @@ class Renderer:
                 Profiler.profile_accumulate_report(intervals=60)
             
             # Clear the RGB buffer for the next frame
-            self.rgb_buffer[:] = [50, 50, 120]
-            self.z_buffer.fill(-np.inf)
+            # self.rgb_buffer[:] = [50, 50, 120]
+            # self.z_buffer.fill(-np.inf)
+            self.create_empty_rgb_buffer()
+            self.create_empty_z_buffer()
 
             pygame.display.flip()
             self.clock.tick(60)
