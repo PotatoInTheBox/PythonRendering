@@ -76,7 +76,10 @@ def profile_accumulate_report(intervals=1):
     print("\n////////==== Report Start ====\\\\\\\\\\\\\\\\")
     grand_total = sum(total for total, count, _ in _profile_accumulators.values())
 
-    for name, (total, count, _) in _profile_accumulators.items():
+    # Sort keys: normal entries first (alphabetical), then those starting with "f:"
+    sorted_items = sorted(_profile_accumulators.items(), key=lambda x: (x[0].startswith("f:"), x[0]))
+
+    for name, (total, count, _) in sorted_items:
         if count == 0:
             continue
         total_ms = total * 1000
@@ -404,50 +407,30 @@ class Renderer:
             # TODO Let's instead just change the light calculations to invert in the normal being flipped.
         else:
             light = np.array([0, 1, 0]) # The light is pointing towards positive y. This means down for us.
-        camera_direction = np.array([0, 0, 1])
 
         global angle
         Rx = rotation_matrix_x(angle)
         Ry = rotation_matrix_y(angle)
         R = Ry @ Rx
-        # angle += 0.01
-        
+
+        # R must be 4d in order to be used in the matrix
+        R_4d = np.eye(4)
+        R_4d[:3, :3] = R
+
+        model_matrix = R_4d  # T @ R @ S
+
         pitch, yaw, roll = self.camera_rot
         Rx = rotation_matrix_x(pitch)
         Ry = rotation_matrix_y(yaw)
         Rz = rotation_matrix_z(roll)
         R_cam = Rz @ Ry @ Rx  # camera rotation
         R_view = R_cam.T  # inverse of rotation matrix is transpose
-        profile_accumulate_end("draw_polygons: pre_compute")
-        
-        # We are going to precompute as much as possible.
-        # Basically, we are going to set up all the matrix calculations, make a
-        # VERTEX list (or have it ready for numpy),
-        # Then we apply all the vertex transformations using numpy.
-        
-        # The standard pipeline is as follows:
-        # * Object space (won't deal with yet, treat it as world space, possibly going to apply scaling, transorms, and rotations in the future)
-        # * World space (assume this is the start)
-        # * View Space (rotated and transformed relative to the camera)
-        # * Clip Space (perspective transformation applied)
-        # * Normalized Device Coordinates (NDC) space (perspective divided by w)
-        # obj space 
-        # -> world space 
-        # -> view space 
-        # -> clip space 
-        # -> normalized device coordinates (ndc) space 
-        # -> screen space
-        
-        vertex_list = self.object.vertices
         
         # Assuming: vertex_list = [(x, y, z), ...]
-        V = np.array(vertex_list)  # Shape: (N, 3)
+        V = np.array(self.object.vertices)  # Shape: (N, 3)
 
         # Add homogeneous coordinate
         V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
-        
-        # Identity model matrix
-        model_matrix = np.eye(4)
         
         # R_view must be 4d in order to be used in the matrix
         R_view_4d = np.eye(4)
@@ -462,7 +445,7 @@ class Renderer:
         view_matrix = R_view_4d @ T_view
 
         # Combine all transforms into a single 4x4 matrix
-        M = self.projection_matrix @ view_matrix @ model_matrix  # or just view @ model if no projection yet
+        M = self.projection_matrix @ view_matrix @ model_matrix
 
         # Transform all vertices in one go
         V_clip = (M @ V.T).T  # Shape: (N, 4)
@@ -472,22 +455,37 @@ class Renderer:
         
         faces = np.array(self.object.faces)  # Shape (F, 3)
         tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
-        vertices = np.array(self.object.vertices)  # Shape (V, 3)
 
-        tri_world_all = vertices[faces]  # Shape (F, 3, 3)
+        V_world = (model_matrix @ V.T).T[:, :3]  # apply model matrix, ignore w
+        tri_world_all = V_world[faces]
+        
+        # Precompute all normals of all faces
+        a = tri_world_all[:,1] - tri_world_all[:,0]  # (N, 3)
+        b = tri_world_all[:,2] - tri_world_all[:,0]  # (N, 3)
+        normals = np.cross(a, b)
+        normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
+        
+        # precompute the brightness of all faces
+        brightness_all = np.clip((normals @ light + 1) / 2, 0, 1)
+        
+        # precompute colors of all faces
+        color_all = (brightness_all[:, None] * COLOR_WHITE).astype(int)
 
+        profile_accumulate_end("draw_polygons: pre_compute")
         profile_accumulate_start("draw_polygons: project_and_draw")
         for i in range(len(faces)):
             profile_accumulate_start("draw_polygons: project_and_draw: project")
-  
+            profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
             # === Frustum near-plane culling using clip.w (approximated here) ===
             if any(V_clip[j][3] <= 0 for j in faces[i]):
                 profile_accumulate_end("draw_polygons: project_and_draw: project")
+                profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
                 continue
-            
+            profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
             # === NDC Space ===
             tri_ndc = tri_ndc_all[i]
             
+            profile_accumulate_start("draw_polygons: project_and_draw: project: backface culling")
             # === Backface culling ===
             a = tri_ndc[1][:2] - tri_ndc[0][:2]
             b = tri_ndc[2][:2] - tri_ndc[0][:2]
@@ -495,20 +493,17 @@ class Renderer:
             facing_camera = screen_normal_z < 0
             if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
                 profile_accumulate_end("draw_polygons: project_and_draw: project")
+                profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
                 continue
-
+            profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
             # === World-space triangle ===
             tri_world = tri_world_all[i]
 
-            # === Compute face normal ===
-            a = tri_world[1] - tri_world[0]
-            b = tri_world[2] - tri_world[0]
-            normal = normalize(np.cross(a, b))
+            profile_accumulate_start("draw_polygons: project_and_draw: project: lighting")
+            color = color_all[i]
+            profile_accumulate_end("draw_polygons: project_and_draw: project: lighting")
 
-            # === Lighting ===
-            brightness = max(0, (np.dot(normal, light) + 1) / 2)
-            color = tuple(int(brightness * c) for c in COLOR_WHITE)
-
+            profile_accumulate_start("draw_polygons: project_and_draw: project: screenspace conversion")
             # === Convert to screen space ===
             tri_screen = [
                 (
@@ -518,6 +513,7 @@ class Renderer:
                 )
                 for v in tri_ndc
             ]
+            profile_accumulate_end("draw_polygons: project_and_draw: project: screenspace conversion")
             profile_accumulate_end("draw_polygons: project_and_draw: project")
             profile_accumulate_start("draw_polygons: project_and_draw: draw")
             if draw_faces or draw_z_buffer:
