@@ -496,12 +496,9 @@ class Renderer:
                 profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
                 continue
             profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
-            # === World-space triangle ===
-            tri_world = tri_world_all[i]
 
-            profile_accumulate_start("draw_polygons: project_and_draw: project: lighting")
+            # apply light to this face
             color = color_all[i]
-            profile_accumulate_end("draw_polygons: project_and_draw: project: lighting")
 
             profile_accumulate_start("draw_polygons: project_and_draw: project: screenspace conversion")
             # === Convert to screen space ===
