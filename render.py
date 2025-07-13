@@ -38,7 +38,7 @@ COLOR_WHITE = (255, 255, 255)
 COLOR_DARK_GRAY = (50, 50, 50)
 COLOR_PINK = (255, 105, 180)
 
-OBJ_PATH = "./models/utahTeapot.obj"
+OBJ_PATH = "./models/blender_monkey.obj"
 CONUTER_CLOCKWISE_TRIANGLES = False
 START_DISTANCE = 4.0
 CAMERA_SPEED = 0.1
@@ -188,7 +188,7 @@ def normalize_obj_vertices(vertices):
     return (v - center) / scale
 
 class Renderer:
-    def __init__(self, width: int = 800, height: int = 800, grid_size: int = 200) -> None:
+    def __init__(self, width: int = 800, height: int = 800, grid_size: int = 100) -> None:
         pygame.init()
         self.width, self.height = width, height
         self.grid_size = grid_size
@@ -197,25 +197,8 @@ class Renderer:
         pygame.display.set_caption("Renderer")
         self.clock = pygame.time.Clock()
         self.running = True
-
-        # Initialize 2D RGB buffer
         self.rgb_buffer = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
         self.z_buffer = np.full((self.grid_size, self.grid_size), -np.inf, dtype=np.float32)
-        # Initialize 2D polygon buffer
-        self.triangle_buffer = [
-            [(12, 14), (18, 22), (15, 30)],
-            [(20, 20), (30, 25), (25, 35)],
-            [(40, 15), (45, 28), (35, 33)],
-            [(60, 40), (70, 45), (65, 55)],
-            [(50, 60), (55, 65), (45, 70)],
-            [(30, 50), (35, 60), (25, 65)],
-            [(80, 20), (85, 30), (75, 35)],
-            [(15, 75), (20, 85), (10, 90)],
-            [(70, 70), (80, 75), (75, 85)],
-            [(90, 10), (95, 20), (85, 25)],
-            [(65, 25), (70, 30), (60, 35)],
-            [(22, 40), (28, 45), (24, 50)],
-        ]
 
         self.object = load_obj(OBJ_PATH)
         self.object.vertices = normalize_obj_vertices(self.object.vertices)
@@ -502,7 +485,7 @@ class Renderer:
 
         profile_accumulate_end("draw_polygons: pre_compute")
         profile_accumulate_start("draw_polygons: project_and_draw")
-        for i in range(len(faces)):
+        for i, face in enumerate(valid_faces_idx):
             profile_accumulate_start("draw_polygons: project_and_draw: project")
             profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
             # === Frustum near-plane culling using clip.w (approximated here) ===
@@ -515,11 +498,11 @@ class Renderer:
             tri_ndc = tri_ndc_all[i]
             
             # Seems to only marginally increase performance
-            BACKFACE_CULLING = False
+            BACKFACE_CULLING = True
             if BACKFACE_CULLING:
                 profile_accumulate_start("draw_polygons: project_and_draw: project: backface culling")
                 # === Backface culling ===
-                if valid_faces_idx[i] != CONUTER_CLOCKWISE_TRIANGLES:
+                if CONUTER_CLOCKWISE_TRIANGLES:
                     profile_accumulate_end("draw_polygons: project_and_draw: project")
                     profile_accumulate_end("draw_polygons: project_and_draw: project: backface culling")
                     continue
