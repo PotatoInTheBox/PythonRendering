@@ -447,6 +447,24 @@ class Renderer:
         profile_accumulate_start("draw_polygons: project_and_draw")
         for face_index in self.object[1]:
             profile_accumulate_start("draw_polygons: project_and_draw: project")
+  
+            # === Use precomputed projected verts ===
+            tri_ndc = [V_ndc[i] for i in face_index]
+            
+            # === Frustum near-plane culling using clip.w (approximated here) ===
+            if any(V_clip[i][3] <= 0 for i in face_index):
+                profile_accumulate_end("draw_polygons: project_and_draw: project")
+                continue
+            
+            # === Backface culling ===
+            a = tri_ndc[1][:2] - tri_ndc[0][:2]
+            b = tri_ndc[2][:2] - tri_ndc[0][:2]
+            screen_normal_z = a[0]*b[1] - a[1]*b[0]
+            facing_camera = screen_normal_z < 0
+            if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
+                profile_accumulate_end("draw_polygons: project_and_draw: project")
+                continue
+
             # === World-space triangle ===
             tri_world = [np.array(self.object[0][i]) for i in face_index]
 
@@ -458,41 +476,6 @@ class Renderer:
             # === Lighting ===
             brightness = max(0, (np.dot(normal, light) + 1) / 2)
             color = tuple(int(brightness * c) for c in COLOR_WHITE)
-  
-            # === Use precomputed projected verts ===
-            tri_ndc = [V_ndc[i] for i in face_index]
-
-            # === Project ===
-            # tri_homogeneous = [np.append(v, 1) for v in tri_camera]
-            # tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
-            # # Skip triangles fully behind the camera
-            # # TODO we are early culling because if I don't then the raster freaks out due to excessively large triangles
-            # if any(v[3] <= 0 for v in tri_projected):
-            #     continue  # Skip invalid projection because it is behind camera
-            # tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
-            
-            # === Frustum near-plane culling using clip.w (approximated here) ===
-            if any(V_clip[i][3] <= 0 for i in face_index):
-                continue
-            
-            # === Backface culling ===
-            a = tri_ndc[1][:2] - tri_ndc[0][:2]
-            b = tri_ndc[2][:2] - tri_ndc[0][:2]
-            screen_normal_z = a[0]*b[1] - a[1]*b[0]
-            facing_camera = screen_normal_z < 0
-            if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
-                continue
-
-            # === Frustum culling ===
-            # if all(
-            #     -1 <= v[0] <= 1 and
-            #     -1 <= v[1] <= 1 and
-            #     0 <= v[2] <= 1  # z in [0, 1] in OpenGL-style projection 
-            #     for v in tri_ndc
-            # ):
-            #     continue
-            # else:
-            #     pass
 
             # === Convert to screen space ===
             tri_screen = [
