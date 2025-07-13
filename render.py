@@ -450,18 +450,9 @@ class Renderer:
             # === World-space triangle ===
             tri_world = [np.array(self.object[0][i]) for i in face_index]
 
-            # === Rotate object ===
-            tri_rotated = [R @ v for v in tri_world]
-            
-            # === View transform: apply inverse camera rotation and translation ===
-            tri_camera = [R_view @ (v - self.camera_pos) for v in tri_rotated]
-
-            # === Translate by camera position (view transform: inverse translation) ===
-            # tri_camera = [v - self.camera_pos for v in tri_rotated]
-
             # === Compute face normal ===
-            a = tri_camera[1] - tri_camera[0]
-            b = tri_camera[2] - tri_camera[0]
+            a = tri_world[1] - tri_world[0]
+            b = tri_world[2] - tri_world[0]
             normal = normalize(np.cross(a, b))
 
             # === Lighting ===
