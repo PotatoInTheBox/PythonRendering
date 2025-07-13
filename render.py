@@ -371,18 +371,19 @@ class Renderer:
             dw1_dx = A1
             dw2_dx = A2
             
-            # Normalize barycentric coordinates
-            alpha = w0 * inv_area
-            beta = w1 * inv_area
-            gamma = w2 * inv_area
-            
-            # Interpolate Z
-            z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
-            
             for x in range(min_x, max_x + 1):
+                # Accept both types of faces. Can be optimized if only one is supported
                 if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                    # Normalize barycentric coordinates
+                    alpha = w0 * inv_area
+                    beta = w1 * inv_area
+                    gamma = w2 * inv_area
+
+                    # Interpolate Z
+                    z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
                     if z > self.z_buffer[y, x]:
                         self.rgb_buffer[y, x] = color
+                        # Do a dumb interpolation (won't work for different perspectives)
                         self.z_buffer[y, x] = z
                 w0 += dw0_dx
                 w1 += dw1_dx
