@@ -46,9 +46,9 @@ _profile_accumulators = {}
 # keep track of our named profilers
 _profile_timers = {}
 
-OBJ_PATH = "./models/ship.obj"
-CONUTER_CLOCKWISE_TRIANGLES = False
-START_DISTANCE = 10.0
+OBJ_PATH = "./models/teapot.obj"
+CONUTER_CLOCKWISE_TRIANGLES = True
+START_DISTANCE = 100.0
 
 def profile_accumulate_start(name: str):
     if name not in _profile_accumulators:
@@ -372,7 +372,7 @@ class Renderer:
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
-            
+
     @timed()
     def draw_polygons(self, scale=1, offset=(0, 0)):
         profile_accumulate_start("draw_polygons: pre_compute")
@@ -399,6 +399,50 @@ class Renderer:
         R_cam = Rz @ Ry @ Rx  # camera rotation
         R_view = R_cam.T  # inverse of rotation matrix is transpose
         profile_accumulate_end("draw_polygons: pre_compute")
+        
+        # We are going to precompute as much as possible.
+        # Basically, we are going to set up all the matrix calculations, make a
+        # VERTEX list (or have it ready for numpy),
+        # Then we apply all the vertex transformations using numpy.
+        
+        # The standard pipeline is as follows:
+        # * Object space (won't deal with yet, treat it as world space, possibly going to apply scaling, transorms, and rotations in the future)
+        # * World space (assume this is the start)
+        # * View Space (rotated and transformed relative to the camera)
+        # * Perspective Space (perspective transformation applied)
+        # * Clip Space (???)
+        
+        vertex_list = self.object[0]
+        
+        # Assuming: vertex_list = [(x, y, z), ...]
+        V = np.array(vertex_list)  # Shape: (N, 3)
+
+        # Add homogeneous coordinate
+        V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
+        
+        # Identity model matrix
+        model_matrix = np.eye(4)
+        
+        # R_view must be 4d in order to be used in the matrix
+        R_view_4d = np.eye(4)
+        R_view_4d[:3, :3] = R_view
+        
+        # Translation to move world relative to camera
+        T_view = np.eye(4)
+        camera_pos = np.array(self.camera_pos)
+        T_view[:3, 3] = -camera_pos
+        
+        # View matrix = rotation * translation
+        view_matrix = R_view_4d @ T_view
+
+        # Combine all transforms into a single 4x4 matrix
+        M = self.projection_matrix @ view_matrix @ model_matrix  # or just view @ model if no projection yet
+
+        # Transform all vertices in one go
+        V_clip = (M @ V.T).T  # Shape: (N, 4)
+
+        # Perspective divide
+        V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
 
         profile_accumulate_start("draw_polygons: project_and_draw")
         for face_index in self.object[1]:
@@ -423,24 +467,31 @@ class Renderer:
             # === Lighting ===
             brightness = max(0, (np.dot(normal, light) + 1) / 2)
             color = tuple(int(brightness * c) for c in COLOR_WHITE)
+  
+            # === Use precomputed projected verts ===
+            tri_ndc = [V_ndc[i] for i in face_index]
 
             # === Project ===
-            tri_homogeneous = [np.append(v, 1) for v in tri_camera]
-            tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
-            # Skip triangles fully behind the camera
-            # TODO we are early culling because if I don't then the raster freaks out due to excessively large triangles
-            if any(v[3] <= 0 for v in tri_projected):
-                continue  # Skip invalid projection because it is behind camera
-            tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
+            # tri_homogeneous = [np.append(v, 1) for v in tri_camera]
+            # tri_projected = [self.projection_matrix @ v for v in tri_homogeneous]
+            # # Skip triangles fully behind the camera
+            # # TODO we are early culling because if I don't then the raster freaks out due to excessively large triangles
+            # if any(v[3] <= 0 for v in tri_projected):
+            #     continue  # Skip invalid projection because it is behind camera
+            # tri_ndc = [v[:3] / v[3] for v in tri_projected]  # NDC space
             
-            # === Backface culling using screen-space normal ===
+            # === Frustum near-plane culling using clip.w (approximated here) ===
+            if any(V_clip[i][3] <= 0 for i in face_index):
+                continue
+            
+            # === Backface culling ===
             a = tri_ndc[1][:2] - tri_ndc[0][:2]
             b = tri_ndc[2][:2] - tri_ndc[0][:2]
-            screen_normal_z = a[0]*b[1] - a[1]*b[0]  # 2D cross product = signed area
+            screen_normal_z = a[0]*b[1] - a[1]*b[0]
             facing_camera = screen_normal_z < 0
             if facing_camera != CONUTER_CLOCKWISE_TRIANGLES:
-                continue  # Cull
-            
+                continue
+
             # === Frustum culling ===
             # if all(
             #     -1 <= v[0] <= 1 and
@@ -470,7 +521,6 @@ class Renderer:
             profile_accumulate_end("draw_polygons: project_and_draw: draw")
         profile_accumulate_end("draw_polygons: project_and_draw")
 
-            
 
     @timed("render_buffer")
     def render_buffer(self):
