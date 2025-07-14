@@ -6,6 +6,15 @@
 # (the renderer can toggle between passthrough mode, where it uses the original drawing methods,
 # and simulated mode, where it updates an RGB buffer instead)
 
+
+# WASD to move forward, left, backwards, and right
+# Space to go up
+# C to go down
+# Dragging mouse allows the camera to look left/right/up/down
+# V to toggle wireframe
+# F to toggle faces
+# Z to toggle z buffer view
+
 import profiler
 from profiler import Profiler
 from renderable_object import RenderableObject
@@ -460,7 +469,7 @@ class Renderer:
                 pygame.draw.line(self.screen, pixel_border_color, (0, y * self.cell_size_y), (self.width, y * self.cell_size_y), PIXEL_BORDER_SIZE)
 
     def run(self):
-        
+
         while self.running:
             global frame_count
             frame_count += 1  # start of the next frame
@@ -491,7 +500,6 @@ class Renderer:
                     elif event.type == pygame.MOUSEBUTTONUP:
                         if event.button == 1:
                             self.dragging = False
-                            print(f"Camera rotated with new vector ({self.camera_rot[0]}, {self.camera_rot[1]}, {self.camera_rot[2]})")
                     elif event.type == pygame.MOUSEMOTION and self.dragging:
                         x, y = pygame.mouse.get_pos()
                         dx = x - self.last_mouse_pos[0]
