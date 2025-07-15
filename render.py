@@ -18,6 +18,7 @@
 import profiler
 from profiler import Profiler
 from renderable_object import RenderableObject
+from transform import Transform
 
 import pygame
 import sys
@@ -45,11 +46,11 @@ MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
 NAME_OBJ = RenderableObject.load_new_obj("./models/name.obj")
 SHIP_OBJ = RenderableObject.load_new_obj("./models/ship.obj")
 
-MONKEY_OBJ.transform.set_translation([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
-NAME_OBJ.transform.set_translation([0,0,0])  # We will have this at the origin
+MONKEY_OBJ.transform = MONKEY_OBJ.transform.with_translation([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
+NAME_OBJ.transform = NAME_OBJ.transform.with_translation([0,0,0])  # We will have this at the origin
 NAME_SCALE = 1.8
-NAME_OBJ.transform.set_scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
-SHIP_OBJ.transform.set_translation([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
+NAME_OBJ.transform = NAME_OBJ.transform.with_scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
+SHIP_OBJ.transform = SHIP_OBJ.transform.with_translation([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
 RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ]  # all the objects we want rendered
@@ -101,23 +102,23 @@ def get_projection_matrix(fov, aspect, near, far):
     proj[3,2] = -1
     return proj
 
-def rotation_matrix_x(theta):
-    c, s = np.cos(theta), np.sin(theta)
-    return np.array([[1, 0, 0],
-                    [0, c, -s],
-                    [0, s,  c]])
+# def rotation_matrix_x(theta):
+#     c, s = np.cos(theta), np.sin(theta)
+#     return np.array([[1, 0, 0],
+#                     [0, c, -s],
+#                     [0, s,  c]])
 
-def rotation_matrix_y(theta):
-    c, s = np.cos(theta), np.sin(theta)
-    return np.array([[ c, 0, s],
-                    [ 0, 1, 0],
-                    [-s, 0, c]])
+# def rotation_matrix_y(theta):
+#     c, s = np.cos(theta), np.sin(theta)
+#     return np.array([[ c, 0, s],
+#                     [ 0, 1, 0],
+#                     [-s, 0, c]])
 
-def rotation_matrix_z(theta):
-    c, s = np.cos(theta), np.sin(theta)
-    return np.array([[c, -s, 0],
-                    [s,  c, 0],
-                    [0,  0, 1]])
+# def rotation_matrix_z(theta):
+#     c, s = np.cos(theta), np.sin(theta)
+#     return np.array([[c, -s, 0],
+#                     [s,  c, 0],
+#                     [0,  0, 1]])
 
 class Renderer:
     def __init__(self, width: int = 900, height: int = 450, grid_size_x: int = 150, grid_size_y: int = 75) -> None:
@@ -317,20 +318,23 @@ class Renderer:
                 light = np.array([0, 1, 0]) # The light is pointing towards positive y. This means down for us.
 
             global angle
-            Rx = rotation_matrix_x(angle)
-            Ry = rotation_matrix_y(angle)
-            R = Ry @ Rx
+            # Rx = rotation_matrix_x(angle)
+            # Ry = rotation_matrix_y(angle)
+            # R = Ry @ Rx
+
+            R = Transform().with_rotation([angle, angle, 0])
 
             # model_matrix = R_4d  # T @ R @ S
-            r_object.transform.set_rotation(R)
+            r_object.transform = r_object.transform.with_rotation(R)
             model_matrix = r_object.transform.get_matrix()
 
             pitch, yaw, roll = self.camera_rot
-            Rx = rotation_matrix_x(pitch)
-            Ry = rotation_matrix_y(yaw)
-            Rz = rotation_matrix_z(roll)
-            R_cam = Rz @ Ry @ Rx  # camera rotation
-            R_view = R_cam.T  # inverse of rotation matrix is transpose
+            # Rx = rotation_matrix_x(pitch)
+            # Ry = rotation_matrix_y(yaw)
+            # Rz = rotation_matrix_z(roll)
+            # R_cam = Rz @ Ry @ Rx  # camera rotation
+            R_cam = Transform().with_rotation([pitch, yaw, roll])
+            R_view = R_cam.get_matrix().T  # inverse of rotation matrix is transpose
             
             # Assuming: vertex_list = [(x, y, z), ...]
             V = np.array(r_object.vertices)  # Shape: (N, 3)
@@ -340,7 +344,7 @@ class Renderer:
             
             # R_view must be 4d in order to be used in the matrix
             R_view_4d = np.eye(4)
-            R_view_4d[:3, :3] = R_view
+            R_view_4d[:3, :3] = R_view[:3, :3]
             
             # Translation to move world relative to camera
             T_view = np.eye(4)
@@ -539,12 +543,13 @@ class Renderer:
 
                     # Camera rotation to world space
                     pitch, yaw, roll = self.camera_rot
-                    Rx = rotation_matrix_x(pitch)
-                    Ry = rotation_matrix_y(yaw)
-                    Rz = rotation_matrix_z(roll)
-                    R_cam = Rz @ Ry @ Rx
-                    move_world = R_cam @ move_dir
-                    self.camera_pos += move_world
+                    # Rx = rotation_matrix_x(pitch)
+                    # Ry = rotation_matrix_y(yaw)
+                    # Rz = rotation_matrix_z(roll)
+                    # R_cam = Rz @ Ry @ Rx
+                    R_cam = Transform().with_rotation([pitch, yaw, roll])
+                    move_world = R_cam @ Transform(translation=move_dir)
+                    self.camera_pos += move_world.get_matrix()[:3, 3]
 
             self.render_buffer()
             
