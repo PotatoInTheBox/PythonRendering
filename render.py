@@ -340,7 +340,18 @@ class Renderer:
             V = np.array(r_object.vertices)  # Shape: (N, 3)
 
             # Add homogeneous coordinate
+            # TODO possibly implement column-vector
             V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
+            
+            # Add vertex wave shader
+            for i, vertex in enumerate(V):
+                # Object vertex X position
+                x_pos = vertex[0]
+                amplitude = 0.4  # bigger number = taller wave
+                period = 3  # bigger number = shorter wave
+                speed = 0.01
+                vertex_wave_shader = Transform(translation=[0,np.sin((x_pos+(frame_count*(speed)))*(period))*amplitude,0])
+                V[i] = V[i] @ vertex_wave_shader.get_matrix().T
             
             # R_view must be 4d in order to be used in the matrix
             R_view_4d = np.eye(4)

@@ -9,7 +9,7 @@ class Transform:
         self._matrix = self._translation @ self._rotation @ self._scale
 
     def get_matrix(self) -> NDArray[np.float64]:
-        return self._matrix
+        return self._matrix # type: ignore
 
     def with_rotation(self, R) -> "Transform":
         return Transform(rotation=self._parse_rotation(R),
