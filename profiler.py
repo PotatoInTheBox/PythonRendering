@@ -1,3 +1,5 @@
+# profiler.py
+
 import time
 
 # Accumulates total time spent in named segments

@@ -1,3 +1,5 @@
+# renderable_object.py
+
 import numpy as np
 from transform import Transform
 

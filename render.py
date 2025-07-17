@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# render.py
 
 # The goal of this project is to make a python renderer that can simulate drawing operations.
 # This is for practice only.
@@ -19,6 +20,9 @@ import profiler
 from profiler import Profiler
 from renderable_object import RenderableObject
 from transform import Transform
+from debug_window import DebugWindow
+from config import Config
+from config import ConfigEntry
 
 import pygame
 import sys
@@ -28,14 +32,14 @@ from typing import List, Tuple
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
     ctypes.windll.user32.SetProcessDPIAware()
-
-# ========== Screen settings ==========
-SCREEN_WIDTH = 900  # How much width should the window have?
-SCREEN_HEIGHT = 450  # How much height should the window have?
-GRID_CELL_SIZE = 5  # How many pixels big is each raster cell?
+    
+# Prepare the config data
+# TODO move as many settings as possible into the config
+render_config = Config()
+debug_win = DebugWindow()
 
 # ========== Camera settings ==========
-CAMERA_SPEED = 0.1
+debug_win.create_slider_input_float("CAMERA_SPEED", render_config.camera_speed, min_val=0.001, max_val=1)
 START_DISTANCE = 4.0
 CAMERA_POSITION = [0.0,0.0,float(START_DISTANCE)]
 CAMERA_ROTATION = [0.0,0.0,0]
@@ -121,15 +125,37 @@ def get_projection_matrix(fov, aspect, near, far):
 #                     [0,  0, 1]])
 
 class Renderer:
-    def __init__(self, width: int = 900, height: int = 450, grid_size_x: int = 150, grid_size_y: int = 75) -> None:
-        self.width, self.height = width, height
-        self.grid_size_x = grid_size_x
-        self.grid_size_y = grid_size_y
-        self.cell_size_x = width // grid_size_x
-        self.cell_size_y = height // grid_size_y
+    def __init__(self) -> None:
+        self.width = render_config.screen_width.val
+        self.height = render_config.screen_height.val
+        # ========== Screen settings ==========
+        debug_win.create_debug_label("SCREEN_WIDTH", render_config.screen_width)  # How much width should the window have?
+        debug_win.create_debug_label("SCREEN_HEIGHT", render_config.screen_height)  # How much height should the window have?
+        debug_win.create_slider_input_int("CELL_SIZE", render_config.cell_size, min_val=1, max_val=20, on_change=lambda _: self.initialize_render_buffers())  # How many pixels big is each raster cell?
+
+        self.initialize_render_scene()
+        pygame.init()
+        pygame.display.set_caption("Renderer")
+        self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
+        self.clock = pygame.time.Clock()
+        self.running = True
+    
+    def initialize_render_scene(self):
+        self.initialize_render_buffers()
+        self.initialize_start_positions()
+        # Load and create our object which we will render
+        self.objects = RENDER_OBJECTS
+    
+    def initialize_render_buffers(self):
+        self.grid_size_x = self.width // render_config.cell_size.val
+        self.grid_size_y = self.height // render_config.cell_size.val
+        self.cell_size_x = render_config.cell_size.val
+        self.cell_size_y = render_config.cell_size.val
         self.create_empty_rgb_buffer()
         self.create_empty_z_buffer()
-        
+        self.initialize_projection_matrix()
+    
+    def initialize_start_positions(self):
         # The camera will need to face -z. So we need to push the camera towards positive z.
         # This is because our object will be at 0.
         self.camera_pos = CAMERA_POSITION
@@ -137,16 +163,9 @@ class Renderer:
         self.last_mouse_pos = (0, 0)
         # The camera is facing towards positive z.
         self.camera_rot = CAMERA_ROTATION
-        self.camera_speed = CAMERA_SPEED
+    
+    def initialize_projection_matrix(self):
         self.projection_matrix = get_projection_matrix(fov=np.radians(FOV),aspect=self.grid_size_x/self.grid_size_y,near=0.1,far=1000)
-        # Load and create our object which we will render
-        self.objects = RENDER_OBJECTS
-        
-        pygame.init()
-        pygame.display.set_caption("Renderer")
-        self.screen = pygame.display.set_mode((width, height))
-        self.clock = pygame.time.Clock()
-        self.running = True
     
     def create_empty_rgb_buffer(self):
         self.rgb_buffer = np.zeros((self.grid_size_y, self.grid_size_x, 3), dtype=np.uint8)
@@ -476,7 +495,7 @@ class Renderer:
         surface = pygame.transform.scale(surface, (self.width, self.height))
         self.screen.blit(surface, (0, 0))
 
-        if DRAW_PIXEL_BORDER:
+        if DRAW_PIXEL_BORDER and self.cell_size_x > 2 and self.cell_size_y > 2:
             pixel_border_color = COLOR_DARK_GRAY
             for x in range(self.grid_size_x):
                 pygame.draw.line(self.screen, pixel_border_color, (x * self.cell_size_x, 0), (x * self.cell_size_x, self.height), PIXEL_BORDER_SIZE)
@@ -484,7 +503,6 @@ class Renderer:
                 pygame.draw.line(self.screen, pixel_border_color, (0, y * self.cell_size_y), (self.width, y * self.cell_size_y), PIXEL_BORDER_SIZE)
 
     def run(self):
-
         while self.running:
             global frame_count
             frame_count += 1  # start of the next frame
@@ -550,7 +568,7 @@ class Renderer:
 
                 if np.linalg.norm(move_dir) > 0:
                     # move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed
-                    move_dir = move_dir / np.linalg.norm(move_dir) * self.camera_speed * move_boost
+                    move_dir = move_dir / np.linalg.norm(move_dir) * render_config.camera_speed.val * move_boost
 
                     # Camera rotation to world space
                     pitch, yaw, roll = self.camera_rot
@@ -575,11 +593,12 @@ class Renderer:
 
             pygame.display.flip()
             self.clock.tick(60)
+            debug_win.render_ui()
 
         pygame.quit()
 
 if __name__ == "__main__":
-    renderer = Renderer(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH//GRID_CELL_SIZE, SCREEN_HEIGHT//GRID_CELL_SIZE)
+    renderer = Renderer()
     renderer.run()
 
 # NOTE ChatGPT (4o for general templates) and Copilot (internally using GPT-4.1) was used in this project.
