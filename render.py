@@ -93,6 +93,8 @@ draw_lines = False
 
 frame_count = 0  # count frames rendered so far
 
+hover_triangle_index = -1
+
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
 
@@ -105,6 +107,17 @@ def get_projection_matrix(fov, aspect, near, far):
     proj[2,3] = (2 * far * near) / (near - far)
     proj[3,2] = -1
     return proj
+
+def point_in_triangle(pt, v0, v1, v2):
+    # Barycentric technique for 2D point-in-triangle
+    def sign(p1, p2, p3):
+        return (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
+
+    b1 = sign(pt, v0, v1) < 0.0
+    b2 = sign(pt, v1, v2) < 0.0
+    b3 = sign(pt, v2, v0) < 0.0
+
+    return ((b1 == b2) and (b2 == b3))
 
 # def rotation_matrix_x(theta):
 #     c, s = np.cos(theta), np.sin(theta)
@@ -172,7 +185,7 @@ class Renderer:
         self.rgb_buffer[:] = COLOR_SLATE_BLUE
     
     def create_empty_z_buffer(self):
-        self.z_buffer = np.full((self.grid_size_y, self.grid_size_x), -np.inf, dtype=np.float32)
+        self.z_buffer = np.full((self.grid_size_y, self.grid_size_x), np.inf, dtype=np.float32)
 
     def _is_bounded(self, position: Tuple[int, int]) -> bool:
         x, y = position
@@ -309,9 +322,8 @@ class Renderer:
 
                     # Interpolate Z
                     z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
-                    if z > self.z_buffer[y, x]:
+                    if z < self.z_buffer[y, x]:
                         self.rgb_buffer[y, x] = color
-                        # Do a dumb interpolation (won't work for different perspectives)
                         self.z_buffer[y, x] = z
                 w0 += dw0_dx
                 w1 += dw1_dx
@@ -325,6 +337,8 @@ class Renderer:
 
     @Profiler.timed()
     def draw_polygons(self):
+        global hover_triangle_index
+        hover_triangle_index = -1
         for r_object in self.objects:
             Profiler.profile_accumulate_start("draw_polygons: pre_compute")
             # === Setup ===
@@ -411,23 +425,11 @@ class Renderer:
             # precompute colors of all faces
             color_all = (brightness_all[:, None] * COLOR_WHITE).astype(int)
             
-            # Precompute frustrum culling
-            # faces: (F, 3), V_clip: (V, 4)
-            w_vals = V_clip[:, 3]  # (V,)
-
-            # Gather w components per face vertex
-            w_faces = w_vals[faces]  # (F, 3)
-
-            # Check if any w <= 0 per face (near-plane culling)
-            mask = np.any(w_faces <= 0, axis=1)  # (F,) True if face is culled
-
-            # Cull faces upfront
-            valid_faces_idx = np.nonzero(~mask)[0]
-            
             # Precompute screen space
             # Extract x, y, z (NDC space)
             xy = tri_ndc_all[:, :, :2]  # (F, 3, 2)
-            z = tri_ndc_all[:, :, 2]    # (F, 3)
+            # z = tri_ndc_all[:, :, 2]    # (F, 3)
+            z = -tri_ndc_all[:, :, 2]  # flip the z because somewhere in my logic i flipped it a long time ago
 
             # Convert x, y to screen coordinates
             grid_x = self.grid_size_x
@@ -441,8 +443,6 @@ class Renderer:
 
             Profiler.profile_accumulate_end("draw_polygons: pre_compute")
             Profiler.profile_accumulate_start("draw_polygons: project_and_draw")
-            # Backface culling seems a bit inaccurate right now
-            # for i, face in enumerate(valid_faces_idx):
             for i, face in enumerate(faces):
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
@@ -451,19 +451,24 @@ class Renderer:
                     Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
                     Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
                     continue
-                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
+                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")                
 
                 # apply light to this face
                 color = color_all[i]
 
                 # === Convert to screen space ===
                 tri_screen = tri_screen_all[i]
+                # global hover_triangle_index
+                if point_in_triangle((mouse_x, mouse_y), tri_screen[0], tri_screen[1], tri_screen[2]):
+                    color = COLOR_RED
+                    hover_triangle_index = i
                 Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: draw")
                 if draw_faces or draw_z_buffer:
                     self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
                 if draw_lines:
                     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
+                
                 Profiler.profile_accumulate_end("draw_polygons: project_and_draw: draw")
             Profiler.profile_accumulate_end("draw_polygons: project_and_draw")
 
@@ -484,9 +489,9 @@ class Renderer:
                 z_max += 1e-5  # Prevent divide by zero
             
             z_range = z_max - z_min
-            z_scaled = np.clip((self.z_buffer - z_min) / z_range, 0, 1)
+            z_scaled = np.clip((z_max - self.z_buffer) / z_range, 0, 1)
             z_norm = (z_scaled * 205 + 50).astype(np.uint8)  # near = dark, far = bright
-            z_norm[~np.isfinite(self.z_buffer)] = 0  # Inf → black
+            z_norm[~np.isfinite(self.z_buffer)] = 255  # +inf → white (far away)
 
             z_gray = np.stack([z_norm] * 3, axis=-1)
             surface = pygame.surfarray.make_surface(z_gray.swapaxes(0, 1))
@@ -530,6 +535,8 @@ class Renderer:
                             if event.button == 1:  # Left click
                                 self.dragging = True
                                 self.last_mouse_pos = pygame.mouse.get_pos()
+                                global hover_triangle_index
+                                print(f"Red triangle index is {hover_triangle_index}")
                     elif event.type == pygame.MOUSEBUTTONUP:
                         if event.button == 1:
                             self.dragging = False
@@ -586,8 +593,6 @@ class Renderer:
                 Profiler.profile_accumulate_report(intervals=60)
             
             # Clear the RGB buffer for the next frame
-            # self.rgb_buffer[:] = [50, 50, 120]
-            # self.z_buffer.fill(-np.inf)
             self.create_empty_rgb_buffer()
             self.create_empty_z_buffer()
 
