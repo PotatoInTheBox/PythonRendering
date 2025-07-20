@@ -439,11 +439,23 @@ class Renderer:
 
             # Combine x, y, z back
             tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
+            
+            
+            a = tri_ndc_all[:,1] - tri_ndc_all[:,0]  # (N, 3)
+            b = tri_ndc_all[:,2] - tri_ndc_all[:,0]  # (N, 3)
+            ndc_normals = np.cross(a, b)
+            
+            facing_camera_idx = ndc_normals.size * [True]
+            
+            facing_camera_idx = ndc_normals[:, 2] >= 0  # Shape (F,)
 
             Profiler.profile_accumulate_end("draw_polygons: pre_compute")
             Profiler.profile_accumulate_start("draw_polygons: project_and_draw")
             for i, face in enumerate(faces):
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
+                if facing_camera_idx[i] == False:
+                    Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
+                    continue
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
                 # === Frustum near-plane culling using clip.w (approximated here) ===
                 if any(V_clip[j][3] <= 0 for j in faces[i]):
