@@ -81,7 +81,7 @@ COLOR_PINK = (255, 105, 180)
 COLOR_SLATE_BLUE = (50, 50, 120)
 
 # ========== Rendering modes ==========
-CONUTER_CLOCKWISE_TRIANGLES = False
+CONUTER_CLOCKWISE_TRIANGLES = False  # NOTE. In the future I plan to deprecate this
 
 # ========== Global variables ==========
 angle = 0
@@ -325,9 +325,11 @@ class Renderer:
     def draw_polygons(self):
         global hover_triangle_index
         hover_triangle_index = -1
+
         for r_object in self.objects:
             Profiler.profile_accumulate_start("draw_polygons: pre_compute")
-            # === Setup ===
+
+            # ========= Setup =========
             if CONUTER_CLOCKWISE_TRIANGLES:
                 light = np.array([0, -1, 0]) # for some reason I have to flip the light direction when the triangles are different
                 # I guess that kinda makes sense. I'm getting the normals of the triangle, which if counter clockwise, will lead
@@ -338,23 +340,24 @@ class Renderer:
 
             global angle
 
+            # ========= MODEL SPACE → WORLD SPACE =========
             R = Transform().with_rotation([angle, angle, 0])
-
             # model_matrix = R_4d  # T @ R @ S
             r_object.transform = r_object.transform.with_rotation(R)
             model_matrix = r_object.transform.get_matrix()
 
+            # ========= WORLD SPACE → VIEW SPACE =========
             pitch, yaw, roll = self.camera_rot
             R_cam = Transform().with_rotation([pitch, yaw, roll])
             R_view = R_cam.get_matrix().T  # inverse of rotation matrix is transpose
-            
+
             # Assuming: vertex_list = [(x, y, z), ...]
             V = np.array(r_object.vertices)  # Shape: (N, 3)
 
             # Add homogeneous coordinate
             # TODO possibly implement column-vector
             V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
-            
+
             # Add vertex wave shader
             for i, vertex in enumerate(V):
                 # Object vertex X position
@@ -364,46 +367,49 @@ class Renderer:
                 speed = render_config.wave_speed.val  # The speed/increment of the wave, based on frame count
                 vertex_wave_shader = Transform(translation=[0,np.sin((x_pos+(frame_count*(speed)))*(period))*amplitude,0])
                 V[i] = V[i] @ vertex_wave_shader.get_matrix().T
-            
+
             # R_view must be 4d in order to be used in the matrix
             R_view_4d = np.eye(4)
             R_view_4d[:3, :3] = R_view[:3, :3]
-            
+
             # Translation to move world relative to camera
             T_view = np.eye(4)
             camera_pos = np.array(self.camera_pos)
             T_view[:3, 3] = -camera_pos
-            
+
             # View matrix = rotation * translation
             view_matrix = R_view_4d @ T_view
 
             # Combine all transforms into a single 4x4 matrix
             M = self.projection_matrix @ view_matrix @ model_matrix
 
+            # ========= VIEW SPACE → CLIP SPACE =========
             # Transform all vertices in one go
             V_clip = (M @ V.T).T  # Shape: (N, 4)
 
             # Perspective divide
             V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
-            
+
             faces = np.array(r_object.faces)  # Shape (F, 3)
             tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
 
+            # ========= MODEL → WORLD FOR LIGHTING =========
             V_world = (model_matrix @ V.T).T[:, :3]  # apply model matrix, ignore w
             tri_world_all = V_world[faces]
-            
+
             # Precompute all normals of all faces
             a = tri_world_all[:,1] - tri_world_all[:,0]  # (N, 3)
             b = tri_world_all[:,2] - tri_world_all[:,0]  # (N, 3)
             normals = np.cross(a, b)
             normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
-            
+
             # precompute the brightness of all faces
             brightness_all = np.clip((normals @ light + 1) / 2, 0, 1)
-            
+
             # precompute colors of all faces
             color_all = (brightness_all[:, None] * COLOR_WHITE).astype(int)
-            
+
+            # ========= NDC → SCREEN SPACE =========
             # Precompute screen space
             # Extract x, y, z (NDC space)
             xy = tri_ndc_all[:, :, :2]  # (F, 3, 2)
@@ -419,49 +425,57 @@ class Renderer:
 
             # Combine x, y, z back
             tri_screen_all = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
-            
-            
+
+            # Compute normals in NDC for backface culling
             a = tri_ndc_all[:,1] - tri_ndc_all[:,0]  # (N, 3)
             b = tri_ndc_all[:,2] - tri_ndc_all[:,0]  # (N, 3)
             ndc_normals = np.cross(a, b)
-            
+
             facing_camera_idx = ndc_normals.size * [True]
-            
             facing_camera_idx = ndc_normals[:, 2] >= 0  # Shape (F,)
 
             Profiler.profile_accumulate_end("draw_polygons: pre_compute")
             Profiler.profile_accumulate_start("draw_polygons: project_and_draw")
+
+            # ========= DRAWING =========
             for i, face in enumerate(faces):
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
+
                 if facing_camera_idx[i] == False:
                     Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
                     continue
+
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project: frustum culling")
-                # === Frustum near-plane culling using clip.w (approximated here) ===
+                # ========= Frustum near-plane culling using clip.w (approximated here) =========
                 if any(V_clip[j][3] <= 0 for j in faces[i]):
                     Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
                     Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
                     continue
-                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")                
+                Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project: frustum culling")
 
                 # apply light to this face
                 color = color_all[i]
 
-                # === Convert to screen space ===
+                # ========= Convert to screen space =========
                 tri_screen = tri_screen_all[i]
+
                 # global hover_triangle_index
                 if point_in_triangle((mouse_x, mouse_y), tri_screen[0], tri_screen[1], tri_screen[2]):
                     color = COLOR_RED
                     hover_triangle_index = i
+
                 Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
                 Profiler.profile_accumulate_start("draw_polygons: project_and_draw: draw")
+
                 if draw_faces or draw_z_buffer:
                     self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
                 if draw_lines:
                     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
-                
+
                 Profiler.profile_accumulate_end("draw_polygons: project_and_draw: draw")
+
             Profiler.profile_accumulate_end("draw_polygons: project_and_draw")
+
 
 
     @Profiler.timed("render_buffer")
