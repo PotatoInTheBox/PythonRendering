@@ -21,7 +21,14 @@ class RenderableObject:
         self.vertices = (v - center) / scale
 
     @staticmethod
-    def load_new_obj(filepath):
+    def load_new_obj(filepath: str, reverse_faces=False):
+        """
+        Load an OBJ file and optionally reverse triangle winding.
+
+        Args:
+            filepath (str): Path to the OBJ file.
+            reverse_faces (bool): If True, reverse the order of vertices in each face.
+        """
         vertices = []
         triangles = []
 
@@ -37,6 +44,8 @@ class RenderableObject:
                     for p in parts[1:4]:
                         v = p.split('/')[0]  # Always use the first part (vertex index)
                         face.append(int(v) - 1)
+                    if reverse_faces:
+                        face.reverse()  # Reverse winding order
                     triangles.append(tuple(face))
 
         return RenderableObject(vertices, triangles)
