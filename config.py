@@ -25,6 +25,21 @@ class ConfigEntry(Generic[T]):
 
 class Config:
     def __init__(self):
+        # TODO: In the future these values may be moved to a config file which
+        # can then be loaded. This way instead of modifying the code we can modify
+        # a file. However, at the moment we are programming in Python which is more
+        # of a scripting language so configs in the code are probably acceptable
+        # as long as they are easy to find/read/write.
+        
+        # === Initial settings ===
+        # These settings are set once. They cannot be changed afterwards
+        # (changing them will either do nothing or cause issues)
+        START_DISTANCE = 4.0
+        CAMERA_POSITION = [0.0,0.0,float(START_DISTANCE)]
+        self.CAMERA_START_POSITION = ConfigEntry(CAMERA_POSITION, mutable=False)
+        CAMERA_ROTATION = [0.0,0.0,0]
+        self.CAMERA_START_ROTATION = ConfigEntry(CAMERA_ROTATION, mutable=False)
+        
         # === Screen settings ===
         self.screen_width = ConfigEntry(1200, mutable=False)
         self.screen_height = ConfigEntry(800, mutable=False)
@@ -32,10 +47,8 @@ class Config:
 
         # === Camera settings ===
         self.camera_speed = ConfigEntry(0.1)
-        # self.start_distance = 4.0
-        # self.camera_position = [0.0, 0.0, 4.0]  # Mutable vector
-        # self.camera_rotation = [0.0, 0.0, 0.0]
-        # self.fov = 90
+        self.camera_sensitivity = ConfigEntry(1.0)
+        self.fov = ConfigEntry(90.0)  # In degrees, how much can the camera see from left to right?
 
         # === Rendering toggles ===
         self.draw_faces = ConfigEntry(True)

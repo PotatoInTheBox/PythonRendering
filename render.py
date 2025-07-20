@@ -40,10 +40,7 @@ debug_win = DebugWindow()
 
 # ========== Camera settings ==========
 debug_win.create_slider_input_float("CAMERA_SPEED", render_config.camera_speed, min_val=0.001, max_val=1)
-START_DISTANCE = 4.0
-CAMERA_POSITION = [0.0,0.0,float(START_DISTANCE)]
-CAMERA_ROTATION = [0.0,0.0,0]
-FOV=90  # In degrees, how much can the camera see from left to right?
+debug_win.create_slider_input_float("CAMERA_SENSITIVITY", render_config.camera_sensitivity, min_val=0.01, max_val=20)
 
 # ========== Object initialization ==========
 MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
@@ -145,6 +142,8 @@ class Renderer:
         debug_win.create_debug_label("SCREEN_WIDTH", render_config.screen_width)  # How much width should the window have?
         debug_win.create_debug_label("SCREEN_HEIGHT", render_config.screen_height)  # How much height should the window have?
         debug_win.create_slider_input_int("CELL_SIZE", render_config.cell_size, min_val=1, max_val=20, on_change=lambda _: self.initialize_render_buffers())  # How many pixels big is each raster cell?
+        # In degrees, how much can the camera see from left to right?
+        debug_win.create_slider_input_float("FOV", render_config.fov, min_val=10, max_val=170, on_change=lambda _: self.initialize_projection_matrix())
 
         self.initialize_render_scene()
         pygame.init()
@@ -171,14 +170,14 @@ class Renderer:
     def initialize_start_positions(self):
         # The camera will need to face -z. So we need to push the camera towards positive z.
         # This is because our object will be at 0.
-        self.camera_pos = CAMERA_POSITION
+        self.camera_pos = render_config.CAMERA_START_POSITION.val
         self.dragging = False
         self.last_mouse_pos = (0, 0)
         # The camera is facing towards positive z.
-        self.camera_rot = CAMERA_ROTATION
+        self.camera_rot = render_config.CAMERA_START_ROTATION.val
     
     def initialize_projection_matrix(self):
-        self.projection_matrix = get_projection_matrix(fov=np.radians(FOV),aspect=self.grid_size_x/self.grid_size_y,near=0.1,far=1000)
+        self.projection_matrix = get_projection_matrix(fov=np.radians(render_config.fov.val),aspect=self.grid_size_x/self.grid_size_y,near=0.1,far=1000)
     
     def create_empty_rgb_buffer(self):
         self.rgb_buffer = np.zeros((self.grid_size_y, self.grid_size_x, 3), dtype=np.uint8)
@@ -546,8 +545,8 @@ class Renderer:
                         dy = y - self.last_mouse_pos[1]
                         self.last_mouse_pos = (x, y)
 
-                        self.camera_rot[1] -= dx * 0.005  # yaw (Y axis)
-                        self.camera_rot[0] -= dy * 0.005  # pitch (X axis)
+                        self.camera_rot[1] -= dx * 0.005 * render_config.camera_sensitivity.val  # yaw (Y axis)
+                        self.camera_rot[0] -= dy * 0.005 * render_config.camera_sensitivity.val  # pitch (X axis)
                     elif event.type == pygame.KEYDOWN and event.key == pygame.K_z:
                         global draw_z_buffer
                         draw_z_buffer = not draw_z_buffer
