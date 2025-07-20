@@ -54,6 +54,11 @@ class Config:
         self.draw_faces = ConfigEntry(True)
         self.draw_lines = ConfigEntry(False)
         self.draw_z_buffer = ConfigEntry(False)
+        
+        # Wave Settings
+        self.wave_amplitude = ConfigEntry(0.4)  # bigger number = taller wave
+        self.wave_period = ConfigEntry(3.0)  # bigger number = shorter wave
+        self.wave_speed = ConfigEntry(0.01)  # The speed/increment of the wave, based on frame count
 
         # === Debug values (runtime-only) ===
         # self.frame_time = 0.0

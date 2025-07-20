@@ -54,6 +54,11 @@ NAME_OBJ.transform = NAME_OBJ.transform.with_scale([NAME_SCALE,NAME_SCALE,NAME_S
 SHIP_OBJ.transform = SHIP_OBJ.transform.with_translation([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
+# ========== Wave Settings ==========
+debug_win.create_slider_input_float("WAVE_AMPLITUDE", render_config.wave_amplitude, min_val=0.01, max_val=3)  # bigger number = taller wave
+debug_win.create_slider_input_float("WAVE_PERIOD", render_config.wave_period, min_val=0.01, max_val=20)  # bigger number = shorter wave
+debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_val=0.001, max_val=0.1)  # The speed/increment of the wave, based on frame count
+
 RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ]  # all the objects we want rendered
 
 # ========== Performance metrics ==========
@@ -115,24 +120,6 @@ def point_in_triangle(pt, v0, v1, v2):
     b3 = sign(pt, v2, v0) < 0.0
 
     return ((b1 == b2) and (b2 == b3))
-
-# def rotation_matrix_x(theta):
-#     c, s = np.cos(theta), np.sin(theta)
-#     return np.array([[1, 0, 0],
-#                     [0, c, -s],
-#                     [0, s,  c]])
-
-# def rotation_matrix_y(theta):
-#     c, s = np.cos(theta), np.sin(theta)
-#     return np.array([[ c, 0, s],
-#                     [ 0, 1, 0],
-#                     [-s, 0, c]])
-
-# def rotation_matrix_z(theta):
-#     c, s = np.cos(theta), np.sin(theta)
-#     return np.array([[c, -s, 0],
-#                     [s,  c, 0],
-#                     [0,  0, 1]])
 
 class Renderer:
     def __init__(self) -> None:
@@ -350,9 +337,6 @@ class Renderer:
                 light = np.array([0, 1, 0]) # The light is pointing towards positive y. This means down for us.
 
             global angle
-            # Rx = rotation_matrix_x(angle)
-            # Ry = rotation_matrix_y(angle)
-            # R = Ry @ Rx
 
             R = Transform().with_rotation([angle, angle, 0])
 
@@ -361,10 +345,6 @@ class Renderer:
             model_matrix = r_object.transform.get_matrix()
 
             pitch, yaw, roll = self.camera_rot
-            # Rx = rotation_matrix_x(pitch)
-            # Ry = rotation_matrix_y(yaw)
-            # Rz = rotation_matrix_z(roll)
-            # R_cam = Rz @ Ry @ Rx  # camera rotation
             R_cam = Transform().with_rotation([pitch, yaw, roll])
             R_view = R_cam.get_matrix().T  # inverse of rotation matrix is transpose
             
@@ -379,9 +359,9 @@ class Renderer:
             for i, vertex in enumerate(V):
                 # Object vertex X position
                 x_pos = vertex[0]
-                amplitude = 0.4  # bigger number = taller wave
-                period = 3  # bigger number = shorter wave
-                speed = 0.01
+                amplitude = render_config.wave_amplitude.val  # bigger number = taller wave
+                period = render_config.wave_period.val  # bigger number = shorter wave
+                speed = render_config.wave_speed.val  # The speed/increment of the wave, based on frame count
                 vertex_wave_shader = Transform(translation=[0,np.sin((x_pos+(frame_count*(speed)))*(period))*amplitude,0])
                 V[i] = V[i] @ vertex_wave_shader.get_matrix().T
             
