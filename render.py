@@ -262,7 +262,8 @@ class Renderer:
     @Profiler.timed()
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
         def edge(a, b, c):
-            # Returns twice the signed area of triangle abc
+            # Computes twice the signed area of triangle abc.
+            # Used to calculate barycentric coordinates and inside-triangle tests.
             return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
         
         area = edge(p1, p2, p3)  # Precompute this outside the loop
@@ -270,12 +271,28 @@ class Renderer:
             return  # skip degenerate triangle
         inv_area = 1/ area
 
-        min_x = int(max(min(p1[0], p2[0], p3[0]), 0))
-        max_x = int(min(max(p1[0], p2[0], p3[0]), self.grid_size_x - 1))
-        min_y = int(max(min(p1[1], p2[1], p3[1]), 0))
-        max_y = int(min(max(p1[1], p2[1], p3[1]), self.grid_size_y - 1))
+        # Compute integer bounding box of the triangle, clipped to screen size
+        min_x = max(int(min(p1[0], p2[0], p3[0])), 0)
+        max_x = min(int(max(p1[0], p2[0], p3[0])), self.grid_size_x - 1)
+        min_y = max(int(min(p1[1], p2[1], p3[1])), 0)
+        max_y = min(int(max(p1[1], p2[1], p3[1])), self.grid_size_y - 1)
+
+        # width = max_x - min_x + 1
+        # height = max_y - min_y + 1
+
+        # if width <= 0 or height <= 0:
+        #     return
         
-        # Compute edge coefficients for: E(x, y) = A*x + B*y + C
+        if min_x > max_x or min_y > max_y:
+            return  # Triangle is completely outside screen bounds
+        
+        # Create grid of pixel centers for the bounding box
+        xs = np.arange(min_x, max_x + 1)
+        ys = np.arange(min_y, max_y + 1)
+        X, Y = np.meshgrid(xs, ys)  # X and Y arrays represent pixel coordinates
+        
+        # Compute edge function coefficients: E(x, y) = A*x + B*y + C
+        # Each edge function checks whether a point is to the left or right of an edge
         def edge_coeffs(p1, p2):
             A = p1[1] - p2[1]
             B = p2[0] - p1[0]
@@ -285,34 +302,33 @@ class Renderer:
         A0, B0, C0 = edge_coeffs(p2, p3)
         A1, B1, C1 = edge_coeffs(p3, p1)
         A2, B2, C2 = edge_coeffs(p1, p2)
+        
+        # Compute edge function values for all pixels at once (vectorized)
+        w0 = A0 * X + B0 * Y + C0
+        w1 = A1 * X + B1 * Y + C1
+        w2 = A2 * X + B2 * Y + C2
+        
+        # Mask of pixels inside the triangle: all edge signs match (either all >= 0 or all <= 0)
+        mask = ((w0 >= 0) & (w1 >= 0) & (w2 >= 0)) | ((w0 <= 0) & (w1 <= 0) & (w2 <= 0))
+        
+        # Compute barycentric coordinates by normalizing edge function values
+        alpha = w0 * inv_area
+        beta = w1 * inv_area
+        gamma = w2 * inv_area
+        
+        # Interpolate z-values for all pixels (depth calculation)
+        z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
+        
+        # Extract sub-region of z-buffer and color buffer that corresponds to the bounding box
+        sub_zbuffer = self.z_buffer[min_y:max_y+1, min_x:max_x+1]
+        sub_rgb = self.rgb_buffer[min_y:max_y+1, min_x:max_x+1]
 
-        for y in range(min_y, max_y + 1):
-            # Start x from min_x
-            w0 = A0 * min_x + B0 * y + C0
-            w1 = A1 * min_x + B1 * y + C1
-            w2 = A2 * min_x + B2 * y + C2
-
-            # Precompute deltas
-            dw0_dx = A0
-            dw1_dx = A1
-            dw2_dx = A2
-            
-            for x in range(min_x, max_x + 1):
-                # Accept both types of faces. Can be optimized if only one is supported
-                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    # Normalize barycentric coordinates
-                    alpha = w0 * inv_area
-                    beta = w1 * inv_area
-                    gamma = w2 * inv_area
-
-                    # Interpolate Z
-                    z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
-                    if z < self.z_buffer[y, x]:
-                        self.rgb_buffer[y, x] = color
-                        self.z_buffer[y, x] = z
-                w0 += dw0_dx
-                w1 += dw1_dx
-                w2 += dw2_dx
+        # Create mask for pixels that pass both the inside-triangle test and the z-buffer test
+        update_mask = mask & (z < sub_zbuffer)
+        
+        # Update z-buffer and color buffer in one vectorized operation
+        sub_zbuffer[update_mask] = z[update_mask]
+        sub_rgb[update_mask] = color
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
@@ -855,6 +871,7 @@ class Renderer:
             pygame.display.flip()
             self.clock.tick(60)
             debug_win.render_ui()
+            debug_win.apply_pending_updates()
 
         pygame.quit()
 

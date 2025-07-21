@@ -11,6 +11,7 @@ class DebugWindow:
         dpg.create_viewport(title='Dynamic UI Example', width=600, height=200)
         dpg.setup_dearpygui()
         self.controls = {}
+        self.pending_updates = {}
 
         with dpg.window(label="Debug", width=400, height=400) as self.window_id:
             dpg.add_text("Hello, world")
@@ -96,17 +97,39 @@ class DebugWindow:
     # === INTERNAL UPDATE LOGIC ===
     def _update_config(self, label, value, on_change=None):
         """
-        Internal method: Updates the config value and triggers on_change if provided.
+        Queue a configuration update instead of applying immediately.
 
         Args:
-            label (str): Key in controls dictionary.
-            value: New value to set.
-            on_change (callable, optional): Callback executed with `value`.
+            label (str): Control name in `self.controls`.
+            value: New value from the UI input.
+            on_change (callable, optional): Callback to trigger when update is applied.
+        
+        Notes:
+            - This method does NOT apply the change instantly.
+            - Updates are staged and will take effect when `apply_pending_updates()` is called.
         """
-        ref = self.controls[label]
-        ref.val = value  # Mutate in place (config_ref is a list or mutable container)
-        if on_change:
-            on_change(value)
+        # Store in staging area instead of direct mutation
+        self.pending_updates[label] = (value, on_change)
+    
+    def apply_pending_updates(self):
+        """
+        Apply all queued configuration updates.
+
+        Behavior:
+            - Iterates through `self.pending_updates` and updates the corresponding control reference.
+            - Executes any associated `on_change` callback.
+            - Clears the update queue after applying.
+
+        When to Call:
+            - At a safe point in the main loop (e.g., start of the render cycle).
+            - Prevents mid-frame state changes caused by UI interactions.
+        """
+        for label, (value, on_change) in self.pending_updates.items():
+            ref = self.controls[label]
+            ref.val = value
+            if on_change:
+                on_change(value)
+        self.pending_updates.clear()
 
     def update_debug_labels(self):
         """Updates all debug labels with the latest values."""
