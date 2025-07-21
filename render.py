@@ -371,6 +371,13 @@ class Renderer:
     
     @Profiler.timed()
     def compute_view_matrix(self):
+        """
+        Computes the camera view matrix from camera rotation and position.
+
+        Returns:
+            np.ndarray:
+                A 4x4 view transformation matrix (rotation and translation).
+        """
         pitch, yaw, roll = self.camera_rot
         R_cam = Transform().with_rotation([pitch, yaw, roll])
         R_view = R_cam.get_matrix().T  # inverse of rotation matrix is transpose            
@@ -390,6 +397,17 @@ class Renderer:
     
     @Profiler.timed()
     def prepare_vertices(self, obj: RenderableObject) -> np.ndarray:
+        """
+        Converts object vertices into homogeneous coordinates.
+
+        Parameters:
+            obj (RenderableObject):
+                The object containing vertex positions as (N, 3).
+
+        Returns:
+            np.ndarray:
+                Vertex array in homogeneous coordinates of shape (N, 4).
+        """
         # Assuming: vertex_list = [(x, y, z), ...]
         V = np.array(obj.vertices)  # Shape: (N, 3)
 
@@ -400,17 +418,45 @@ class Renderer:
     
     @Profiler.timed()
     def get_model_matrix(self, obj: RenderableObject) -> np.ndarray:
-            # ========= MODEL SPACE → WORLD SPACE =========
-            # Create a matrix for rotating the model.
-            R = Transform().with_rotation([angle, angle, 0])
-            # Set the rotation of the matrix using our rotation matrix.
-            obj.transform = obj.transform.with_rotation(R)
-            # Use our newly completed matrix for future calculations.
-            model_matrix = obj.transform.get_matrix()
-            return model_matrix
+        """
+        Computes the model transformation matrix for the given object.
+
+        Parameters:
+            obj (RenderableObject):
+                The renderable object whose transform is used.
+
+        Returns:
+            np.ndarray:
+                A 4x4 model transformation matrix.
+        """
+        # ========= MODEL SPACE → WORLD SPACE =========
+        # Create a matrix for rotating the model.
+        R = Transform().with_rotation([angle, angle, 0])
+        # Set the rotation of the matrix using our rotation matrix.
+        obj.transform = obj.transform.with_rotation(R)
+        # Use our newly completed matrix for future calculations.
+        model_matrix = obj.transform.get_matrix()
+        return model_matrix
     
     @Profiler.timed()
     def project_vertices(self, V_model: np.ndarray, model_matrix: np.ndarray, view_matrix: np.ndarray, projection_matrix: np.ndarray):
+        """
+        Projects vertices from model space into clip space.
+
+        Parameters:
+            V_model (np.ndarray):
+                Homogeneous model-space vertices (N, 4).
+            model_matrix (np.ndarray):
+                Model transformation matrix (4x4).
+            view_matrix (np.ndarray):
+                View transformation matrix (4x4).
+            projection_matrix (np.ndarray):
+                Projection matrix (4x4).
+
+        Returns:
+            np.ndarray:
+                Vertices in clip space (N, 4).
+        """
         # Combine all transforms into a single 4x4 matrix
         M = projection_matrix @ view_matrix @ model_matrix
 
@@ -421,6 +467,19 @@ class Renderer:
     
     @Profiler.timed()
     def cull_faces(self, V_clip: np.ndarray, faces: np.ndarray):
+        """
+        Performs frustum and backface culling on faces using clip-space coordinates.
+
+        Parameters:
+            V_clip (np.ndarray):
+                Clip-space vertex positions (N, 4).
+            faces (np.ndarray):
+                Face indices referencing vertices (F, 3).
+
+        Returns:
+            np.ndarray:
+                Boolean mask of length F, where True means face is kept.
+        """
         verts = V_clip[faces]  # (F, 3, 4)
 
         # 1. ANY vertex behind camera (z <= 0) → drop
@@ -451,23 +510,71 @@ class Renderer:
     
     @Profiler.timed()
     def perspective_divide(self, V_clip: np.ndarray) -> np.ndarray:
+        """
+        Converts vertices from clip space to normalized device coordinates (NDC).
+
+        Parameters:
+            V_clip (np.ndarray):
+                Clip-space vertex positions (N, 4).
+
+        Returns:
+            np.ndarray:
+                NDC positions (N, 3), after dividing by w.
+        """
         # Perspective divide
         V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
         return V_ndc
 
     @Profiler.timed()
     def compute_world_vertices(self, V_model: np.ndarray, model_matrix: np.ndarray) -> np.ndarray:
+        """
+        Transforms model-space vertices into world space.
+
+        Parameters:
+            V_model (np.ndarray):
+                Homogeneous model-space vertices (N, 4).
+            model_matrix (np.ndarray):
+                Model transformation matrix (4x4).
+
+        Returns:
+            np.ndarray:
+                World-space vertex positions (N, 3).
+        """
         # ========= MODEL → WORLD FOR LIGHTING =========
         V_world = (model_matrix @ V_model.T).T[:, :3]  # apply model matrix, ignore w
         return V_world
     
     @Profiler.timed()
     def compute_world_triangles(self, V_world: np.ndarray, faces: np.ndarray) -> np.ndarray:
+        """
+        Retrieves triangles from world-space vertices using face indices.
+
+        Parameters:
+            V_world (np.ndarray):
+                World-space vertices (N, 3).
+            faces (np.ndarray):
+                Face indices (F, 3).
+
+        Returns:
+            np.ndarray:
+                Triangles in world space of shape (F, 3, 3).
+        """
         tri_world = V_world[faces]
         return tri_world
     
     @Profiler.timed()
     def compute_normals(self, tri_world: np.ndarray) -> np.ndarray:
+        """
+        Computes normalized face normals for triangles.
+
+        Parameters:
+            tri_world (np.ndarray):
+                Triangles in world space (F, 3, 3).
+
+        Returns:
+            np.ndarray:
+                Unit normals for each face (F, 3).
+        """
         # Precompute all normals of all faces
         a = tri_world[:,1] - tri_world[:,0]  # (N, 3)
         b = tri_world[:,2] - tri_world[:,0]  # (N, 3)
@@ -477,6 +584,19 @@ class Renderer:
     
     @Profiler.timed()
     def compute_lighting(self, normals: np.ndarray, light: np.ndarray) -> np.ndarray:
+        """
+        Computes per-face lighting using Lambertian shading.
+
+        Parameters:
+            normals (np.ndarray):
+                Normalized face normals (F, 3).
+            light (np.ndarray):
+                Directional light vector (3,).
+
+        Returns:
+            np.ndarray:
+                Per-face colors based on light intensity (F, 3).
+        """
         # precompute the brightness of all faces
         # Mapped from [-1,1] -> [0,1] so that faces not facing the light
         # still slightly light up.
@@ -488,6 +608,19 @@ class Renderer:
     
     @Profiler.timed()
     def ndc_to_screen(self, V_ndc: np.ndarray, faces: np.ndarray) -> np.ndarray:
+        """
+        Converts NDC coordinates of vertices to screen-space coordinates.
+
+        Parameters:
+            V_ndc (np.ndarray):
+                Normalized device coordinates (N, 3).
+            faces (np.ndarray):
+                Face indices (F, 3).
+
+        Returns:
+            np.ndarray:
+                Triangles in screen space of shape (F, 3, 3), where each vertex has (x, y, z).
+        """
         faces = faces  # Shape (F, 3)
         tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
         # ========= NDC → SCREEN SPACE =========
@@ -511,6 +644,19 @@ class Renderer:
     
     @Profiler.timed()
     def draw_faces(self, tri_screen_all: np.ndarray, colors: np.ndarray, faces: np.ndarray):
+        """
+        Draws triangles on the screen with optional wireframe or filled faces.
+
+        Parameters:
+            tri_screen_all (np.ndarray):
+                Screen-space triangles (F, 3, 3).
+            colors (np.ndarray):
+                Color for each face (F, 3).
+            faces (np.ndarray):
+                Face indices for drawing (F, 3).
+        """
+        global hover_triangle_index
+        hover_triangle_index = -1
         # ========= DRAWING =========
         for i, face in enumerate(faces):
             Profiler.profile_accumulate_start("draw_faces: project")
@@ -538,9 +684,17 @@ class Renderer:
 
     @Profiler.timed()
     def draw_polygons(self):
+        """
+        Main rendering pipeline function.
+
+        Handles all steps:
+            - View and model transformations
+            - Vertex processing (e.g., wave shader)
+            - Projection to clip and NDC space
+            - Face culling, lighting, and screen conversion
+            - Final drawing of faces
+        """
         global angle
-        global hover_triangle_index
-        hover_triangle_index = -1
         
         # ========= Setup =========
         # Lights should go FROM the object TO the light.
@@ -575,6 +729,7 @@ class Renderer:
             self.draw_faces(tri_screen_all, colors, faces)
 
     @Profiler.timed("render_buffer")
+
     def render_buffer(self):
         global draw_z_buffer  # Toggle this to enable/disable Z buffer debug view
         # DEBUG_Z_MIN = -100  # how close we can see
