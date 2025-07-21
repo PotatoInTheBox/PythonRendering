@@ -327,6 +327,9 @@ class Renderer:
     # 500x500 triangles cost 0.8ms to draw (not great)
     @Profiler.timed()
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
+        # NOTE: TODO: WARNING: Watch out for negative numbers. Often you may have to flip values.
+        # eg. Barycentric coordinates are inside triangle if all are negative, this also means all teh values have a negative sign.
+        # So multiplying them means getting a value that also has a negative sign (eg. colors)
         def edge(a, b, c):
             # Computes twice the signed area of triangle abc.
             # Used to calculate barycentric coordinates and inside-triangle tests.
@@ -342,12 +345,6 @@ class Renderer:
         max_x = min(int(max(p1[0], p2[0], p3[0])), self.grid_size_x - 1)
         min_y = max(int(min(p1[1], p2[1], p3[1])), 0)
         max_y = min(int(max(p1[1], p2[1], p3[1])), self.grid_size_y - 1)
-
-        # width = max_x - min_x + 1
-        # height = max_y - min_y + 1
-
-        # if width <= 0 or height <= 0:
-        #     return
         
         if min_x > max_x or min_y > max_y:
             return  # Triangle is completely outside screen bounds
@@ -375,15 +372,29 @@ class Renderer:
         w2 = A2 * X + B2 * Y + C2
         
         # Mask of pixels inside the triangle: all edge signs match (either all >= 0 or all <= 0)
-        mask = ((w0 >= 0) & (w1 >= 0) & (w2 >= 0)) | ((w0 <= 0) & (w1 <= 0) & (w2 <= 0))
+        mask = ((w0 <= 0) & (w1 <= 0) & (w2 <= 0))  # | ((w0 >= 0) & (w1 >= 0) & (w2 >= 0)) 
         
         # Compute barycentric coordinates by normalizing edge function values
-        alpha = w0 * inv_area
-        beta = w1 * inv_area
-        gamma = w2 * inv_area
+        w0_n = w0 * inv_area
+        w1_n = w1 * inv_area
+        w2_n = w2 * inv_area
         
+        # Normalize the base color (255,255,255 -> [1,1,1], 128,128,128 -> [0.5,0.5,0.5])
+        base_color_factor = np.array(color) / 255.0  # shape (3,)
+        
+        # If p1 is Red, p2 is Green, p3 is Blue
+        color_map = (w0_n[..., None] * -(np.array(COLOR_RED)) +  # p1
+                    w1_n[..., None]  * -(np.array(COLOR_GREEN)) +  # p2
+                    w2_n[..., None] * -(np.array(COLOR_BLUE)))   # p3
+        
+        # Apply shading (element-wise multiply with base color factor)
+        final_color = color_map * base_color_factor  # still float
+        
+        # Clip and convert to uint8
+        final_color = np.clip(final_color, 0, 255).astype(np.uint8)
+
         # Interpolate z-values for all pixels (depth calculation)
-        z = alpha * p1[2] + beta * p2[2] + gamma * p3[2]
+        z = w0_n * p1[2] + w1_n * p2[2] + w2_n * p3[2]
         
         # Extract sub-region of z-buffer and color buffer that corresponds to the bounding box
         sub_zbuffer = self.z_buffer[min_y:max_y+1, min_x:max_x+1]
@@ -394,7 +405,7 @@ class Renderer:
         
         # Update z-buffer and color buffer in one vectorized operation
         sub_zbuffer[update_mask] = z[update_mask]
-        sub_rgb[update_mask] = color
+        sub_rgb[update_mask] = final_color[update_mask]
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
