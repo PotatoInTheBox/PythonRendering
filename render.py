@@ -513,7 +513,7 @@ class Renderer:
     def draw_faces(self, tri_screen_all: np.ndarray, colors: np.ndarray, faces: np.ndarray):
         # ========= DRAWING =========
         for i, face in enumerate(faces):
-            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: project")
+            Profiler.profile_accumulate_start("draw_faces: project")
 
             # apply light to this face
             color = colors[i]
@@ -526,15 +526,15 @@ class Renderer:
                 color = COLOR_RED
                 hover_triangle_index = i
 
-            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: project")
-            Profiler.profile_accumulate_start("draw_polygons: project_and_draw: draw")
+            Profiler.profile_accumulate_end("draw_faces: project")
+            Profiler.profile_accumulate_start("draw_faces: draw")
 
             if draw_faces or draw_z_buffer:
                 self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
             if draw_lines:
                 self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
 
-            Profiler.profile_accumulate_end("draw_polygons: project_and_draw: draw")
+            Profiler.profile_accumulate_end("draw_faces: draw")
 
     @Profiler.timed()
     def draw_polygons(self):
