@@ -27,6 +27,8 @@ from config import ConfigEntry
 import pygame
 import sys
 import ctypes
+import cv2
+from skimage.draw import line
 import numpy as np
 from typing import List, Tuple
 # Make windows not scale this window (pixels do have to be perfect)
@@ -177,7 +179,71 @@ class Renderer:
         return 0 <= x < self.grid_size_x and 0 <= y < self.grid_size_y
 
     def draw_line(self, start: Tuple[int, int], end: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED, width: int = 1) -> None:
-        self.bresenhams_algorithm_draw_line(start, end, color)
+        # self.bresenhams_algorithm_draw_line(start, end, color)
+        self.draw_line_opencv(start, end, color, width)
+        
+        
+    def draw_line_opencv(self, start: Tuple[int, int], end: Tuple[int, int], color: Tuple[int, int, int] = COLOR_RED, width: int = 1) -> None:
+        """
+        Draws a line on the RGB buffer using OpenCV.
+        
+        NOTE: It is not z-buffer aware. So it will simply force a line anywhere.
+
+        Args:
+            start: (x1, y1) starting pixel coordinates.
+            end: (x2, y2) ending pixel coordinates.
+            color: RGB color tuple (R, G, B).
+            width: Thickness of the line in pixels.
+        """
+        # Ensure color and buffer are in correct format
+        x1, y1 = map(int, np.round(start))
+        x2, y2 = map(int, np.round(end))
+        cv2.line(self.rgb_buffer, (x1, y1), (x2, y2), color, thickness=width)
+    
+    def draw_line_skimage(self, start: Tuple[int, int, float], end: Tuple[int, int, float], color: Tuple[int, int, int] = COLOR_RED, width: int = 1) -> None:
+        """
+        Draw a z-buffer-aware line on the RGB buffer.
+        
+        NOTE: Currently overwrites the z buffer for some reason
+        This means all line drawing should be done before drawing faces.
+
+        Args:
+            start: (x, y, z) starting point.
+            end: (x, y, z) ending point.
+            color: RGB color tuple.
+            width: Not used (line thickness unsupported in z-buffer mode).
+        """
+        # Extract coordinates and depth
+        x1, y1, z1 = start
+        x2, y2, z2 = end
+
+        # Round to nearest int for rasterization
+        x1, y1 = int(round(x1)), int(round(y1))
+        x2, y2 = int(round(x2)), int(round(y2))
+        
+        # Early out: completely outside buffer bounds
+        h, w = self.rgb_buffer.shape[:2]
+        if (x1 < 0 and x2 < 0) or (y1 < 0 and y2 < 0) or \
+        (x1 >= w and x2 >= w) or (y1 >= h and y2 >= h):
+            return  # Entire line is outside the viewport
+
+        # Get all pixel positions along the line
+        rr, cc = line(y1, x1, y2, x2)
+        num_points = len(rr)
+
+        # Interpolate Z values along the line
+        z_values = np.linspace(z1, z2, num_points)
+
+        # Clip to buffer bounds
+        mask = (rr >= 0) & (rr < self.rgb_buffer.shape[0]) & \
+            (cc >= 0) & (cc < self.rgb_buffer.shape[1])
+        rr, cc, z_values = rr[mask], cc[mask], z_values[mask]
+
+        # Apply Z-buffer test
+        update_mask = z_values < self.z_buffer[rr, cc]
+        # Prioritize the line in the z buffer ever so slightly to reduce z fighting
+        self.z_buffer[rr[update_mask], cc[update_mask]] = -z_values[update_mask] - 0.0005
+        self.rgb_buffer[rr[update_mask], cc[update_mask]] = color
 
     # https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
     @Profiler.timed()
@@ -335,6 +401,11 @@ class Renderer:
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
         self.draw_line(p3, p1, color)
+    
+    def draw_triangle_with_z(self, p1: Tuple[int, int, float], p2: Tuple[int, int, float], p3: Tuple[int, int, float], color: Tuple[int, int, int] = COLOR_WHITE):
+        self.draw_line_skimage(p1, p2, color)
+        self.draw_line_skimage(p2, p3, color)
+        self.draw_line_skimage(p3, p1, color)
     
     @Profiler.timed()
     def apply_vertex_wave_shader(self, verticies: np.ndarray, amplitude: float, period: float, speed: float) -> np.ndarray:
@@ -675,12 +746,15 @@ class Renderer:
         hover_triangle_index = -1
         # ========= DRAWING =========
         for i, face in enumerate(faces):
+            tri_screen = tri_screen_all[i]
+            if draw_lines:
+                self.draw_triangle_with_z(tri_screen[0][0:3], tri_screen[1][0:3], tri_screen[2][0:3], COLOR_GREEN)
+        for i, face in enumerate(faces):
             Profiler.profile_accumulate_start("draw_faces: project")
 
             # apply light to this face
             color = colors[i]
 
-            # ========= Convert to screen space =========
             tri_screen = tri_screen_all[i]
 
             # global hover_triangle_index
@@ -693,8 +767,8 @@ class Renderer:
 
             if draw_faces or draw_z_buffer:
                 self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
-            if draw_lines:
-                self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
+            # if draw_lines:
+            #     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
 
             Profiler.profile_accumulate_end("draw_faces: draw")
 
@@ -762,8 +836,8 @@ class Renderer:
             
             z_range = z_max - z_min
             z_scaled = np.clip((z_max - self.z_buffer) / z_range, 0, 1)
-            z_norm = (z_scaled * 205 + 50).astype(np.uint8)  # near = dark, far = bright
-            z_norm[~np.isfinite(self.z_buffer)] = 255  # +inf → white (far away)
+            z_norm = (z_scaled * 205 + 50).astype(np.uint8)  # near = bright, far = dark
+            z_norm[~np.isfinite(self.z_buffer)] = 0  # +inf → black (far away)
 
             z_gray = np.stack([z_norm] * 3, axis=-1)
             surface = pygame.surfarray.make_surface(z_gray.swapaxes(0, 1))

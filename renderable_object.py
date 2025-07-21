@@ -4,10 +4,11 @@ import numpy as np
 from transform import Transform
 
 class RenderableObject:
-    def __init__(self, vertices: np.ndarray, faces: np.ndarray, normalize=True):
+    def __init__(self, vertices: np.ndarray, faces: np.ndarray, normalize=True, name="UnnamedObject"):
         self.vertices = vertices
         self.faces = faces
         self.transform = Transform()
+        self.name = name
         if normalize:
             # At startup we conver the verticies to values between -1 and 1.
             self.normalize()
@@ -48,7 +49,7 @@ class RenderableObject:
                         face.reverse()  # Reverse winding order
                     triangles.append(tuple(face))
 
-        return RenderableObject(np.array(vertices), np.array(triangles))
+        return RenderableObject(np.array(vertices), np.array(triangles), name=filepath)
 
     @staticmethod
     def from_data(vertices: np.ndarray, faces: np.ndarray, normalize=True):
