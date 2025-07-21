@@ -8,14 +8,19 @@ import time
 class DebugWindow:
     def __init__(self):
         dpg.create_context()
-        dpg.create_viewport(title='Dynamic UI Example', width=600, height=200)
+        dpg.create_viewport(title='Dynamic UI Example', width=400, height=600)
         dpg.setup_dearpygui()
         self.controls = {}
         self.pending_updates = {}
 
-        with dpg.window(label="Debug", width=400, height=400) as self.window_id:
+        with dpg.window(label="Debug", width=-1, height=-1) as self.window_id:
             dpg.add_text("Hello, world")
             pass  # We'll add widgets dynamically
+        
+        # Make window fill entire viewport
+        dpg.set_primary_window(self.window_id, True)
+        dpg.set_item_width(self.window_id, dpg.get_viewport_width())
+        dpg.set_item_height(self.window_id, dpg.get_viewport_height())
         
         dpg.show_viewport()
     
