@@ -22,6 +22,23 @@ class RenderableObject:
         self.vertices = (v - center) / scale
 
     @staticmethod
+    def parse_face(point_arr: list[str], reverse_faces: bool) -> list[tuple[int,int,int]]:
+        faces = []
+        
+        if len(point_arr) < 3:
+            raise Exception("Cannot build tri if less than 3 points are present!")
+        
+        for i in range(len(point_arr) - 2):
+            face = []
+            for p in [point_arr[0], point_arr[i + 1], point_arr[i + 2]]:
+                v = p.split('/')[0]  # Always use the first part (vertex index)
+                face.append(int(v) - 1)
+            if reverse_faces:
+                face.reverse()
+            faces.append(tuple(face))
+        return faces
+
+    @staticmethod
     def load_new_obj(filepath: str, reverse_faces=False):
         """
         Load an OBJ file and optionally reverse triangle winding.
@@ -41,13 +58,9 @@ class RenderableObject:
                 if parts[0] == 'v':
                     vertices.append(tuple(map(float, parts[1:4])))
                 elif parts[0] == 'f':
-                    face = []
-                    for p in parts[1:4]:
-                        v = p.split('/')[0]  # Always use the first part (vertex index)
-                        face.append(int(v) - 1)
-                    if reverse_faces:
-                        face.reverse()  # Reverse winding order
-                    triangles.append(tuple(face))
+                    faces = RenderableObject.parse_face(parts[1:], reverse_faces)
+                    triangles.extend(faces)
+                    
 
         return RenderableObject(np.array(vertices), np.array(triangles), name=filepath)
 

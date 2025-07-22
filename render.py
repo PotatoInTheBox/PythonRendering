@@ -48,12 +48,16 @@ debug_win.create_slider_input_float("CAMERA_SENSITIVITY", render_config.camera_s
 MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
 NAME_OBJ = RenderableObject.load_new_obj("./models/name.obj")
 SHIP_OBJ = RenderableObject.load_new_obj("./models/ship.obj")
+FOX_OBJ = RenderableObject.load_new_obj("./models/fox.obj")
+CLOUD_OBJ = RenderableObject.load_new_obj("./models/cloud.obj")
 
 MONKEY_OBJ.transform = MONKEY_OBJ.transform.with_translation([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
 NAME_OBJ.transform = NAME_OBJ.transform.with_translation([0,0,0])  # We will have this at the origin
 NAME_SCALE = 1.8
 NAME_OBJ.transform = NAME_OBJ.transform.with_scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
 SHIP_OBJ.transform = SHIP_OBJ.transform.with_translation([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
+FOX_OBJ.transform = FOX_OBJ.transform.with_translation([2, -4, 0])
+CLOUD_OBJ.transform = CLOUD_OBJ.transform.with_translation([1, 10, 4])
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
 # ========== Wave Settings ==========
@@ -61,7 +65,7 @@ debug_win.create_slider_input_float("WAVE_AMPLITUDE", render_config.wave_amplitu
 debug_win.create_slider_input_float("WAVE_PERIOD", render_config.wave_period, min_val=0.01, max_val=20)  # bigger number = shorter wave
 debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_val=0.001, max_val=0.1)  # The speed/increment of the wave, based on frame count
 
-RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ]  # all the objects we want rendered
+RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ]  # all the objects we want rendered
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -405,7 +409,8 @@ class Renderer:
         
         # Update z-buffer and color buffer in one vectorized operation
         sub_zbuffer[update_mask] = z[update_mask]
-        sub_rgb[update_mask] = final_color[update_mask]
+        # sub_rgb[update_mask] = final_color[update_mask]
+        sub_rgb[update_mask] = color
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
