@@ -49,23 +49,33 @@ MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
 NAME_OBJ = RenderableObject.load_new_obj("./models/name.obj")
 SHIP_OBJ = RenderableObject.load_new_obj("./models/ship.obj")
 FOX_OBJ = RenderableObject.load_new_obj("./models/fox.obj")
+FOX_SITTING_OBJ = RenderableObject.load_new_obj("./models/foxSitting.obj")
 CLOUD_OBJ = RenderableObject.load_new_obj("./models/cloud.obj")
+DRAGON_OBJ = RenderableObject.load_new_obj("./models/dragon.obj")
 
-MONKEY_OBJ.transform = MONKEY_OBJ.transform.with_translation([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
-NAME_OBJ.transform = NAME_OBJ.transform.with_translation([0,0,0])  # We will have this at the origin
+
+MONKEY_OBJ.transform.translate([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
+NAME_OBJ.transform.translate([0,0,0])  # We will have this at the origin
 NAME_SCALE = 1.8
-NAME_OBJ.transform = NAME_OBJ.transform.with_scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
-SHIP_OBJ.transform = SHIP_OBJ.transform.with_translation([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
-FOX_OBJ.transform = FOX_OBJ.transform.with_translation([2, -4, 0])
-CLOUD_OBJ.transform = CLOUD_OBJ.transform.with_translation([1, 10, 4])
+NAME_OBJ.transform.scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
+SHIP_OBJ.transform.translate([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
+FOX_OBJ.transform.translate([2, -4, 0])
+CLOUD_OBJ.transform.translate([1, 10, 4])
+FOX_SITTING_OBJ.transform.translate([0.5, -4, 0])
+DRAGON_OBJ.transform.translate([-1, -4, 0])
+DRAGON_OBJ.transform.rotate([0,np.pi,0])
+
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
 # ========== Wave Settings ==========
+DO_WAVE_SHADER = False
 debug_win.create_slider_input_float("WAVE_AMPLITUDE", render_config.wave_amplitude, min_val=0.01, max_val=3)  # bigger number = taller wave
 debug_win.create_slider_input_float("WAVE_PERIOD", render_config.wave_period, min_val=0.01, max_val=20)  # bigger number = shorter wave
 debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_val=0.001, max_val=0.1)  # The speed/increment of the wave, based on frame count
 
-RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ]  # all the objects we want rendered
+RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ]  # all the objects we want rendered
+# RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
+# RENDER_OBJECTS = [NAME_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -95,7 +105,7 @@ mouse_x = 0
 mouse_y = 0
 
 draw_z_buffer = False
-draw_faces = True
+do_draw_faces = True
 draw_lines = False
 
 frame_count = 0  # count frames rendered so far
@@ -536,7 +546,9 @@ class Renderer:
         # Create a matrix for rotating the model.
         R = Transform().with_rotation([angle, angle, 0])
         # Set the rotation of the matrix using our rotation matrix.
-        obj.transform = obj.transform.with_rotation(R)
+        # TODO techincally not at all correct
+        # We are mutating rather than duplicating here.
+        obj.transform.rotate(R)
         # Use our newly completed matrix for future calculations.
         model_matrix = obj.transform.get_matrix()
         return model_matrix
@@ -590,14 +602,33 @@ class Renderer:
 
         # 2. ALL vertices outside clip bounds → drop
         abs_coords = np.abs(verts[..., :3])  # (F, 3, 3)
-        outside_clip = (abs_coords > verts[..., [3]]).all(axis=(1, 2))
+        # outside_clip = (abs_coords > verts[..., [3]]).all(axis=(1, 2))
+        
+        x, y, z, w = verts[..., 0], verts[..., 1], verts[..., 2], verts[..., 3]
+
+        # Check each plane
+        outside_left   = (x < -w)
+        outside_right  = (x >  w)
+        outside_bottom = (y < -w)
+        outside_top    = (y >  w)
+        outside_near   = (z < -w)
+        outside_far    = (z >  w)
+
+        # Face fully outside if all vertices are outside the same plane
+        fully_outside = (
+            outside_left.all(axis=1) |
+            outside_right.all(axis=1) |
+            outside_bottom.all(axis=1) |
+            outside_top.all(axis=1) |
+            outside_near.all(axis=1) |
+            outside_far.all(axis=1)
+        )
         
         CLIP_ANY_OUTSIDE = False
         
         if CLIP_ANY_OUTSIDE:
             # Drop faces if ANY vertex is outside clip bounds
             outside_clip_any = (abs_coords > verts[..., [3]]).any(axis=(1, 2))
-            outside_clip = outside_clip_any
         
         # Compute normals in clip space
         a = verts[:, 1, :3] / verts[:, 1, [3]] - verts[:, 0, :3] / verts[:, 0, [3]]
@@ -608,7 +639,7 @@ class Renderer:
         backfacing = normals[:, 2] < 0  # Facing -Z means away from camera → drop
 
         # Faces to keep
-        faces_kept = ~(behind_camera | outside_clip | backfacing)
+        faces_kept = ~(behind_camera | fully_outside | backfacing)
         return faces_kept
     
     @Profiler.timed()
@@ -781,7 +812,7 @@ class Renderer:
             Profiler.profile_accumulate_end("draw_faces: project")
             Profiler.profile_accumulate_start("draw_faces: draw")
 
-            if draw_faces or draw_z_buffer:
+            if do_draw_faces or draw_z_buffer:
                 self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
             # if draw_lines:
             #     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
@@ -812,11 +843,12 @@ class Renderer:
         for r_object in self.objects:
             Profiler.profile_accumulate_start("draw_polygons: pre_compute")
             V_model = self.prepare_vertices(r_object)
-            V_model = self.apply_vertex_wave_shader(
-                V_model, 
-                render_config.wave_amplitude.val, 
-                render_config.wave_period.val, 
-                render_config.wave_speed.val)
+            if DO_WAVE_SHADER:
+                V_model = self.apply_vertex_wave_shader(
+                    V_model, 
+                    render_config.wave_amplitude.val, 
+                    render_config.wave_period.val, 
+                    render_config.wave_speed.val)
             model_matrix = self.get_model_matrix(r_object)
             V_clip = self.project_vertices(V_model, model_matrix, view_matrix, self.projection_matrix)
             faces_kept = self.cull_faces(V_clip, r_object.faces)
@@ -917,8 +949,8 @@ class Renderer:
                         global draw_lines
                         draw_lines = not draw_lines
                     elif event.type == pygame.KEYDOWN and event.key == pygame.K_f:
-                        global draw_faces
-                        draw_faces = not draw_faces
+                        global do_draw_faces
+                        do_draw_faces = not do_draw_faces
                 keys = pygame.key.get_pressed()
                 move_dir = np.array([0.0, 0.0, 0.0])
                 if keys[pygame.K_LSHIFT]: 

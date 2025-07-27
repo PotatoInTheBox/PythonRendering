@@ -4,35 +4,101 @@ import numpy as np
 from numpy.typing import NDArray
 
 class Transform:
+    """
+    Represents a 3D affine transform composed of separate rotation, scale, and translation components.
+
+    Internally stores each component as a 4x4 homogeneous transformation matrix.
+    The full transform matrix is computed on demand as:
+        Transform = Translation @ Rotation @ Scale
+
+    Methods with_*(...) return a new Transform with the given component replaced.
+    Methods rotate(...), scale(...), translate(...) modify this Transform *in-place* by composing
+    the given transform *onto* the existing one.
+
+    Use copy() to create a new independent copy.
+
+    Supports matrix multiplication (@) to combine two Transforms by multiplying their full matrices.
+
+    Rotation input formats accepted:
+        - Euler angles (3-vector, radians)
+        - 3x3 rotation matrix
+        - 4x4 rotation matrix
+
+    Scale input formats accepted:
+        - 3-vector scale factors
+        - 3x3 scale matrix
+        - 4x4 scale matrix
+
+    Translation input formats accepted:
+        - 3-vector translation
+        - 4x4 translation matrix
+
+    Example usage:
+        t = Transform()
+        t.rotate([0, np.pi/2, 0])     # modifies t in place
+        t.translate([1,0,0])
+        t2 = t.copy()                 # independent copy of t
+    """
     def __init__(self, rotation=None, scale=None, translation=None):
         self._rotation = self._parse_rotation(rotation) if rotation is not None else np.eye(4)
         self._scale = self._parse_scale(scale) if scale is not None else np.eye(4)
         self._translation = self._parse_translation(translation) if translation is not None else np.eye(4)
-        self._matrix = self._translation @ self._rotation @ self._scale
 
     def get_matrix(self) -> NDArray[np.float64]:
-        return self._matrix # type: ignore
+        """Compute and return the combined 4x4 transform matrix."""
+        return self._translation @ self._rotation @ self._scale # type: ignore
 
     def with_rotation(self, R) -> "Transform":
-        return Transform(rotation=self._parse_rotation(R),
-                         scale=self._scale,
-                         translation=self._translation)
+        """Return a new Transform with rotation replaced by R."""
+        rot = self._parse_rotation(R)
+        return Transform(rotation=rot, scale=self._scale, translation=self._translation)
 
     def with_scale(self, S) -> "Transform":
-        return Transform(rotation=self._rotation,
-                         scale=self._parse_scale(S),
-                         translation=self._translation)
+        """Return a new Transform with scale replaced by S."""
+        scale = self._parse_scale(S)
+        return Transform(rotation=self._rotation, scale=scale, translation=self._translation)
 
     def with_translation(self, T) -> "Transform":
-        return Transform(rotation=self._rotation,
-                         scale=self._scale,
-                         translation=self._parse_translation(T))
+        """Return a new Transform with translation replaced by T."""
+        trans = self._parse_translation(T)
+        return Transform(rotation=self._rotation, scale=self._scale, translation=trans)
+
+    def rotate(self, R) -> None:
+        """
+        In-place composition: applies rotation R *after* current rotation.
+        """
+        rot = self._parse_rotation(R)
+        self._rotation = self._rotation @ rot
+
+    def scale(self, S) -> None:
+        """
+        In-place composition: applies scaling S *after* current scale.
+        """
+        scale = self._parse_scale(S)
+        self._scale = self._scale @ scale
+
+    def translate(self, T) -> None:
+        """
+        In-place composition: applies translation T *after* current translation.
+        """
+        trans = self._parse_translation(T)
+        self._translation = self._translation @ trans
+
+    def copy(self) -> "Transform":
+        """Return a deep copy of this Transform."""
+        new_transform = Transform()
+        new_transform._rotation = self._rotation.copy()
+        new_transform._scale = self._scale.copy()
+        new_transform._translation = self._translation.copy()
+        return new_transform
 
     def __matmul__(self, other: "Transform") -> "Transform":
+        """Combine two Transforms by multiplying their full matrices."""
         if not isinstance(other, Transform):
             return NotImplemented
-        combined = self._matrix @ other._matrix
-        return Transform(rotation=np.eye(4), scale=np.eye(4), translation=combined)  # combined as full matrix
+        combined_mat = self.get_matrix() @ other.get_matrix()
+        # Store combined matrix in translation component, leave others identity (no decomposition)
+        return Transform(rotation=np.eye(4), scale=np.eye(4), translation=combined_mat)
 
     @staticmethod
     def _parse_rotation(R):
