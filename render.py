@@ -7,7 +7,6 @@
 # (the renderer can toggle between passthrough mode, where it uses the original drawing methods,
 # and simulated mode, where it updates an RGB buffer instead)
 
-
 # WASD to move forward, left, backwards, and right
 # Space to go up
 # C to go down
@@ -59,10 +58,11 @@ NAME_OBJ.transform.translate([0,0,0])  # We will have this at the origin
 NAME_SCALE = 1.8
 NAME_OBJ.transform.scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
 SHIP_OBJ.transform.translate([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
-FOX_OBJ.transform.translate([2, -4, 0])
 CLOUD_OBJ.transform.translate([1, 10, 4])
-FOX_SITTING_OBJ.transform.translate([0.5, -4, 0])
-DRAGON_OBJ.transform.translate([-1, -4, 0])
+# Place these behind camera since they are kind of intensive (camera isn't at 0 tho...)
+FOX_OBJ.transform.translate([2, -4, 5])
+FOX_SITTING_OBJ.transform.translate([0.5, -4, 5])
+DRAGON_OBJ.transform.translate([-1, -4, 5])
 DRAGON_OBJ.transform.rotate([0,np.pi,0])
 
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
@@ -544,13 +544,10 @@ class Renderer:
         """
         # ========= MODEL SPACE → WORLD SPACE =========
         # Create a matrix for rotating the model.
-        R = Transform().with_rotation([angle, angle, 0])
-        # Set the rotation of the matrix using our rotation matrix.
-        # TODO techincally not at all correct
-        # We are mutating rather than duplicating here.
-        obj.transform.rotate(R)
+        ROTATED_MODEL = obj.transform.copy()
+        ROTATED_MODEL.rotate([angle, angle, 0])
         # Use our newly completed matrix for future calculations.
-        model_matrix = obj.transform.get_matrix()
+        model_matrix = ROTATED_MODEL.get_matrix()
         return model_matrix
     
     @Profiler.timed()
