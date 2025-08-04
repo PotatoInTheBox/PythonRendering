@@ -2,6 +2,8 @@
 
 from typing import Generic, TypeVar
 
+import numpy as np
+
 T = TypeVar('T')
 
 class ConfigEntry(Generic[T]):
@@ -35,9 +37,9 @@ class Config:
         # These settings are set once. They cannot be changed afterwards
         # (changing them will either do nothing or cause issues)
         START_DISTANCE = 4.0
-        CAMERA_POSITION = [0.0,0.0,float(START_DISTANCE)]
+        CAMERA_POSITION = np.array([0.0,0.0,float(START_DISTANCE)])
         self.CAMERA_START_POSITION = ConfigEntry(CAMERA_POSITION, mutable=False)
-        CAMERA_ROTATION = [0.0,0.0,0]
+        CAMERA_ROTATION = np.array([0.0,0.0,0])
         self.CAMERA_START_ROTATION = ConfigEntry(CAMERA_ROTATION, mutable=False)
         
         # === Screen settings ===
@@ -59,6 +61,10 @@ class Config:
         self.wave_amplitude = ConfigEntry(0.4)  # bigger number = taller wave
         self.wave_period = ConfigEntry(3.0)  # bigger number = shorter wave
         self.wave_speed = ConfigEntry(0.01)  # The speed/increment of the wave, based on frame count
+        
+        # Camera transform
+        self.camera_position = ConfigEntry(CAMERA_POSITION)
+        self.camera_rotation = ConfigEntry(CAMERA_ROTATION)
 
         # === Debug values (runtime-only) ===
         # self.frame_time = 0.0

@@ -8,7 +8,7 @@ import time
 class DebugWindow:
     def __init__(self):
         dpg.create_context()
-        dpg.create_viewport(title='Dynamic UI Example', width=400, height=600)
+        dpg.create_viewport(title='Dynamic UI Example', width=500, height=600)
         dpg.setup_dearpygui()
         self.controls = {}
         self.pending_updates = {}
@@ -94,8 +94,8 @@ class DebugWindow:
             label (str): Label name.
             tracked_val: Object with a `val` attribute to display.
         """
-        self.controls[label] = tracked_val
-        dpg.add_text(default_value=f"{label}: {tracked_val.val}",
+        self.controls["dbg_" + label] = tracked_val
+        dpg.add_text(default_value=f"dbg_{label}: {tracked_val.val}",
                     tag=f"dbg_{label}",
                     parent=self.window_id)
 
@@ -139,14 +139,15 @@ class DebugWindow:
     def update_debug_labels(self):
         """Updates all debug labels with the latest values."""
         for label, ref in self.controls.items():
-            if label.startswith("Debug_"):  # You can define custom naming if needed
-                dpg.set_value(f"dbg_{label}", f"{label}: {ref.val}")
+            if label.startswith("dbg_"):  # You can define custom naming if needed
+                dpg.set_value(f"{label}", f"{label}: {ref.val}")
     
     def render_ui(self):
         """Render the UI for this frame (call inside your renderer loop)."""
 
         # self.update_debug_labels()
         # dpg.render_dearpygui_frame()
+        self.update_debug_labels()
         dpg.render_dearpygui_frame()
 
     def shutdown(self):

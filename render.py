@@ -18,10 +18,12 @@
 import profiler
 from profiler import Profiler
 from renderable_object import RenderableObject
+from texture import Texture
 from transform import Transform
 from debug_window import DebugWindow
 from config import Config
 from config import ConfigEntry
+import debug as debug
 
 import pygame
 import sys
@@ -51,6 +53,7 @@ FOX_OBJ = RenderableObject.load_new_obj("./models/fox.obj")
 FOX_SITTING_OBJ = RenderableObject.load_new_obj("./models/foxSitting.obj")
 CLOUD_OBJ = RenderableObject.load_new_obj("./models/cloud.obj")
 DRAGON_OBJ = RenderableObject.load_new_obj("./models/dragon.obj")
+FLOOR_OBJ = RenderableObject.load_new_obj("./models/floor.obj", texture_filepath="./textures/uvGrid.bytes")
 
 
 MONKEY_OBJ.transform.translate([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
@@ -64,6 +67,7 @@ FOX_OBJ.transform.translate([2, -4, 5])
 FOX_SITTING_OBJ.transform.translate([0.5, -4, 5])
 DRAGON_OBJ.transform.translate([-1, -4, 5])
 DRAGON_OBJ.transform.rotate([0,np.pi,0])
+FLOOR_OBJ.transform.translate([0,-0.5,2])
 
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
@@ -73,9 +77,14 @@ debug_win.create_slider_input_float("WAVE_AMPLITUDE", render_config.wave_amplitu
 debug_win.create_slider_input_float("WAVE_PERIOD", render_config.wave_period, min_val=0.01, max_val=20)  # bigger number = shorter wave
 debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_val=0.001, max_val=0.1)  # The speed/increment of the wave, based on frame count
 
-RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ]  # all the objects we want rendered
+# Camera Settings
+debug_win.create_debug_label("Camera Position", render_config.camera_position)
+debug_win.create_debug_label("Camera Rotation", render_config.camera_rotation)
+
+# RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ]  # all the objects we want rendered
 # RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
 # RENDER_OBJECTS = [NAME_OBJ]
+RENDER_OBJECTS = [FLOOR_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -115,7 +124,23 @@ hover_triangle_index = -1
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
 
+def get_ortho_projection_matrix(left, right, bottom, top, near, far):
+    proj = np.zeros((4, 4))
+    proj[0,0] = 2 / (right - left)
+    proj[1,1] = 2 / (top - bottom)
+    proj[2,2] = -2 / (far - near)
+    proj[0,3] = -(right + left) / (right - left)
+    proj[1,3] = -(top + bottom) / (top - bottom)
+    proj[2,3] = -(far + near) / (far - near)
+    proj[3,3] = 1
+    return proj
+
 def get_projection_matrix(fov, aspect, near, far):
+    # top = np.tan(fov / 2) * near
+    # bottom = -top
+    # right = top * aspect
+    # left = -right
+    # return get_ortho_projection_matrix(left, right, bottom, top, near=near, far=far)
     f = 1 / np.tan(fov / 2)
     proj = np.zeros((4, 4))
     proj[0,0] = f / aspect
@@ -172,11 +197,9 @@ class Renderer:
     def initialize_start_positions(self):
         # The camera will need to face -z. So we need to push the camera towards positive z.
         # This is because our object will be at 0.
-        self.camera_pos = render_config.CAMERA_START_POSITION.val
         self.dragging = False
         self.last_mouse_pos = (0, 0)
         # The camera is facing towards positive z.
-        self.camera_rot = render_config.CAMERA_START_ROTATION.val
     
     def initialize_projection_matrix(self):
         self.projection_matrix = get_projection_matrix(fov=np.radians(render_config.fov.val),aspect=self.grid_size_x/self.grid_size_y,near=0.1,far=1000)
@@ -340,19 +363,23 @@ class Renderer:
 
     # 500x500 triangles cost 0.8ms to draw (not great)
     @Profiler.timed()
-    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED):
+    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, texture_obj: Texture|None=None):
+        Profiler.profile_accumulate_start("fill_triangle: prepare calculations")
+        p1 = (p1[0], p1[1], -p1[2])
+        p2 = (p2[0], p2[1], -p2[2])
+        p3 = (p3[0], p3[1], -p3[2])
         # NOTE: TODO: WARNING: Watch out for negative numbers. Often you may have to flip values.
         # eg. Barycentric coordinates are inside triangle if all are negative, this also means all teh values have a negative sign.
         # So multiplying them means getting a value that also has a negative sign (eg. colors)
-        def edge(a, b, c):
+        def cross(a, b, c):
             # Computes twice the signed area of triangle abc.
             # Used to calculate barycentric coordinates and inside-triangle tests.
             return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
         
-        area = edge(p1, p2, p3)  # Precompute this outside the loop
+        area = cross(p1, p2, p3)  # Precompute this outside the loop
         if area == 0:
             return  # skip degenerate triangle
-        inv_area = 1/ area
+        inv_area = 1 / area
 
         # Compute integer bounding box of the triangle, clipped to screen size
         min_x = max(int(min(p1[0], p2[0], p3[0])), 0)
@@ -375,11 +402,16 @@ class Renderer:
             B = p2[0] - p1[0]
             C = p1[0]*p2[1] - p1[1]*p2[0]
             return A, B, C
+        
+        Profiler.profile_accumulate_end("fill_triangle: prepare calculations")
 
+        Profiler.profile_accumulate_start("fill_triangle: calc edge coeffs")
         A0, B0, C0 = edge_coeffs(p2, p3)
         A1, B1, C1 = edge_coeffs(p3, p1)
         A2, B2, C2 = edge_coeffs(p1, p2)
+        Profiler.profile_accumulate_end("fill_triangle: calc edge coeffs")
         
+        Profiler.profile_accumulate_start("fill_triangle: calc barycentric coords")
         # Compute edge function values for all pixels at once (vectorized)
         w0 = A0 * X + B0 * Y + C0
         w1 = A1 * X + B1 * Y + C1
@@ -392,6 +424,9 @@ class Renderer:
         w0_n = w0 * inv_area
         w1_n = w1 * inv_area
         w2_n = w2 * inv_area
+        Profiler.profile_accumulate_end("fill_triangle: calc barycentric coords")
+        
+        Profiler.profile_accumulate_start("fill_triangle: fill pixels")
         
         # Normalize the base color (255,255,255 -> [1,1,1], 128,128,128 -> [0.5,0.5,0.5])
         base_color_factor = np.array(color) / 255.0  # shape (3,)
@@ -419,8 +454,50 @@ class Renderer:
         
         # Update z-buffer and color buffer in one vectorized operation
         sub_zbuffer[update_mask] = z[update_mask]
-        # sub_rgb[update_mask] = final_color[update_mask]
-        sub_rgb[update_mask] = color
+        
+        # TODO I have literally no clue why this works....
+        if texture_obj is not None and uv_triplet is not None:
+            (u1, v1), (u2, v2), (u3, v3) = uv_triplet
+
+            inv_w1, inv_w2, inv_w3 = tri_inv_w
+
+            # u/w per vertex
+            u1w = u1 * inv_w1
+            u2w = u2 * inv_w2
+            u3w = u3 * inv_w3
+
+            # v/w per vertex
+            v1w = v1 * inv_w1
+            v2w = v2 * inv_w2
+            v3w = v3 * inv_w3
+
+            # Interpolate perspective-correct values
+            u_w = w0_n * u1w + w1_n * u2w + w2_n * u3w
+            v_w = w0_n * v1w + w1_n * v2w + w2_n * v3w
+            inv_w = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
+
+            # Final UVs
+            u = u_w / inv_w
+            v = v_w / inv_w
+            
+            u = np.nan_to_num(u, nan=0.0)
+            v = np.nan_to_num(v, nan=0.0)
+
+            # Map to pixel indices
+            tex_x = (u * texture_obj.width).astype(np.int32)
+            tex_y = (v * texture_obj.height).astype(np.int32)
+            tex_x = np.clip(tex_x, 0, texture_obj.width - 1)
+            tex_y = np.clip(tex_y, 0, texture_obj.height - 1)
+
+            # Sample and write
+            sampled_color = texture_obj.image[tex_y, tex_x] * 255.0
+            sub_rgb[update_mask] = sampled_color[update_mask]
+        else:
+            # sub_rgb[update_mask] = final_color[update_mask]
+            sub_rgb[update_mask] = color
+        
+        
+        Profiler.profile_accumulate_end("fill_triangle: fill pixels")
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
@@ -491,7 +568,7 @@ class Renderer:
             np.ndarray:
                 A 4x4 view transformation matrix (rotation and translation).
         """
-        pitch, yaw, roll = self.camera_rot
+        pitch, yaw, roll = render_config.camera_rotation.val
         R_cam = Transform().with_rotation([pitch, yaw, roll])
         R_view = R_cam.get_matrix().T  # inverse of rotation matrix is transpose            
 
@@ -501,7 +578,7 @@ class Renderer:
 
         # Translation to move world relative to camera
         T_view = np.eye(4)
-        camera_pos = np.array(self.camera_pos)
+        camera_pos = np.array(render_config.camera_position.val)
         T_view[:3, 3] = -camera_pos
 
         # View matrix = rotation * translation
@@ -640,7 +717,7 @@ class Renderer:
         return faces_kept
     
     @Profiler.timed()
-    def perspective_divide(self, V_clip: np.ndarray) -> np.ndarray:
+    def perspective_divide(self, V_clip: np.ndarray) -> Tuple[np.ndarray,np.ndarray]:
         """
         Converts vertices from clip space to normalized device coordinates (NDC).
 
@@ -654,7 +731,9 @@ class Renderer:
         """
         # Perspective divide
         V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
-        return V_ndc
+        inv_w = 1.0 / V_clip[:, 3:4]
+        return V_ndc, inv_w
+
 
     @Profiler.timed()
     def compute_world_vertices(self, V_model: np.ndarray, model_matrix: np.ndarray) -> np.ndarray:
@@ -774,7 +853,7 @@ class Renderer:
         return tri_screen
     
     @Profiler.timed()
-    def draw_faces(self, tri_screen_all: np.ndarray, colors: np.ndarray, faces: np.ndarray):
+    def draw_faces(self, tri_screen_all: np.ndarray, colors: np.ndarray, faces: np.ndarray, uv_coords: np.ndarray, uv_faces: np.ndarray, inv_w: np.ndarray, texture_obj: Texture|None=None):
         """
         Draws triangles on the screen with optional wireframe or filled faces.
 
@@ -800,6 +879,11 @@ class Renderer:
             color = colors[i]
 
             tri_screen = tri_screen_all[i]
+            tri_inv_w = inv_w[face]
+            if uv_faces.size > 0:
+                tri_uv = (uv_coords[uv_faces[i][0]], uv_coords[uv_faces[i][1]], uv_coords[uv_faces[i][2]])
+            else:
+                tri_uv = None
 
             # global hover_triangle_index
             if point_in_triangle((mouse_x, mouse_y), tri_screen[0], tri_screen[1], tri_screen[2]):
@@ -810,7 +894,7 @@ class Renderer:
             Profiler.profile_accumulate_start("draw_faces: draw")
 
             if do_draw_faces or draw_z_buffer:
-                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], color) # type: ignore
+                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], tri_inv_w, color, tri_uv, texture_obj) # type: ignore
             # if draw_lines:
             #     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
 
@@ -849,7 +933,7 @@ class Renderer:
             model_matrix = self.get_model_matrix(r_object)
             V_clip = self.project_vertices(V_model, model_matrix, view_matrix, self.projection_matrix)
             faces_kept = self.cull_faces(V_clip, r_object.faces)
-            V_ndc = self.perspective_divide(V_clip)
+            V_ndc, inv_w = self.perspective_divide(V_clip)
 
             V_world = self.compute_world_vertices(V_model, model_matrix)
             tri_world = self.compute_world_triangles(V_world, r_object.faces)
@@ -858,10 +942,14 @@ class Renderer:
             colors = colors[faces_kept]  # keep only faces kept
 
             faces = r_object.faces[faces_kept]   # keep only faces kept
+            if r_object.uv_faces.shape[0] == faces_kept.shape[0]:
+                uv_faces = r_object.uv_faces[faces_kept]
+            else:
+                uv_faces = np.empty((0, 3, 2))
             tri_screen_all = self.ndc_to_screen(V_ndc, faces)
             Profiler.profile_accumulate_end("draw_polygons: pre_compute")
             
-            self.draw_faces(tri_screen_all, colors, faces)
+            self.draw_faces(tri_screen_all, colors, faces, r_object.uv_coords, uv_faces, inv_w, r_object.texture)
 
     @Profiler.timed("render_buffer")
 
@@ -937,8 +1025,8 @@ class Renderer:
                         dy = y - self.last_mouse_pos[1]
                         self.last_mouse_pos = (x, y)
 
-                        self.camera_rot[1] -= dx * 0.005 * render_config.camera_sensitivity.val  # yaw (Y axis)
-                        self.camera_rot[0] -= dy * 0.005 * render_config.camera_sensitivity.val  # pitch (X axis)
+                        render_config.camera_rotation.val[1] -= dx * 0.005 * render_config.camera_sensitivity.val  # yaw (Y axis)
+                        render_config.camera_rotation.val[0] -= dy * 0.005 * render_config.camera_sensitivity.val  # pitch (X axis)
                     elif event.type == pygame.KEYDOWN and event.key == pygame.K_z:
                         global draw_z_buffer
                         draw_z_buffer = not draw_z_buffer
@@ -969,14 +1057,14 @@ class Renderer:
                     move_dir = move_dir / np.linalg.norm(move_dir) * render_config.camera_speed.val * move_boost
 
                     # Camera rotation to world space
-                    pitch, yaw, roll = self.camera_rot
+                    pitch, yaw, roll = render_config.camera_rotation.val
                     # Rx = rotation_matrix_x(pitch)
                     # Ry = rotation_matrix_y(yaw)
                     # Rz = rotation_matrix_z(roll)
                     # R_cam = Rz @ Ry @ Rx
                     R_cam = Transform().with_rotation([pitch, yaw, roll])
                     move_world = R_cam @ Transform(translation=move_dir)
-                    self.camera_pos += move_world.get_matrix()[:3, 3]
+                    render_config.camera_position.val += move_world.get_matrix()[:3, 3]
 
             self.render_buffer()
             
