@@ -74,14 +74,14 @@ class RenderableObject:
                     uv_face_tri.append(int(face_data[1]) - 1)
                 else:
                     # TODO seems wrong
-                    uv_face_tri.append(0)
+                    uv_face_tri.append(-1)
 
                 # normal index
                 if len(face_data) > 2 and face_data[2] != '':
                     n_face_tri.append(int(face_data[2]) - 1)
                 else:
                     # TODO seems wrong
-                    n_face_tri.append(0)
+                    n_face_tri.append(-1)
 
             if reverse_faces:
                 v_face_tri.reverse()
@@ -126,6 +126,27 @@ class RenderableObject:
                     triangles.extend(faces)
                     all_uv_faces.extend(uv_faces)
                     all_normal_faces.extend(normal_faces)
+            
+            for face_idx, normal_idx in zip(triangles, all_normal_faces):
+                if -1 in normal_idx:
+                    v0, v1, v2 = (np.array(vertices[i]) for i in face_idx)
+                    n = np.cross(v1 - v0, v2 - v0)
+                    norm_len = np.linalg.norm(n)
+                    if norm_len != 0:
+                        n /= norm_len
+                    normals.append(tuple(n))
+                    new_n_idx = len(normals) - 1
+                    old_idx = normal_idx
+                    normal_idx = tuple(new_n_idx if i == -1 else i for i in normal_idx)
+                    all_normal_faces[all_normal_faces.index(old_idx)] = normal_idx
+
+                            
+            for index_tri in all_normal_faces:
+                for index in index_tri:
+                    if index == -1:
+                        raise Exception("Not yet generated")
+                    if index >= len(normals) or index < 0:
+                        raise Exception("Normal pointing to invalid index")
         
         texture_obj: Texture|None = None
         if texture_filepath is not None:

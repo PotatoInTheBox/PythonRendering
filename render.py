@@ -39,8 +39,10 @@ from typing import Any, List, Optional, Tuple
 from numpy.typing import NDArray
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
+    USING_WINDOWS = True
     ctypes.windll.user32.SetProcessDPIAware()
-    
+else:
+    USING_WINDOWS = False
 # Prepare the config data
 # TODO move as many settings as possible into the config
 render_config = global_config
@@ -69,7 +71,8 @@ SHIP_OBJ.transform.translate([3,-1,1])  # we will have this on the right of our 
 CLOUD_OBJ.transform.translate([1, 10, 4])
 # Place these behind camera since they are kind of intensive (camera isn't at 0 tho...)
 FOX_OBJ.transform.translate([2, -4, 5])
-FOX_SITTING_OBJ.transform.translate([0.5, -4, 5])
+# FOX_SITTING_OBJ.transform.translate([0.5, -4, 5])
+FOX_SITTING_OBJ.transform.translate([0, 0.25, 2])
 DRAGON_OBJ.transform.translate([-1, -4, 5])
 DRAGON_OBJ.transform.rotate([0,np.pi,0])
 FLOOR_OBJ.transform.translate([0,-0.5,2])
@@ -90,6 +93,7 @@ debug_win.create_debug_label("Camera Rotation", render_config.camera_rotation)
 # RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
 # RENDER_OBJECTS = [NAME_OBJ]
 RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
+# RENDER_OBJECTS = [FLOOR_OBJ, MONKEY_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -426,7 +430,7 @@ class Renderer:
             n_norm = n / np.linalg.norm(n, axis=-1, keepdims=True)
 
             # ----- Lighting (basic diffuse) -----
-            light_dir = np.array([0, 0, -1])  # Example: directional light from camera
+            light_dir = np.array([0, 1, 0])  # Example: directional light from camera
             intensity = np.clip(np.sum(n_norm * light_dir, axis=-1, keepdims=True), 0, 1)
             sampled = (sampled * intensity).astype(np.uint8)
 
@@ -438,26 +442,53 @@ class Renderer:
         Flat shading. Supports optional per-vertex normals for lighting.
         """
         if tri_n is not None:
+            light_dir = np.array([0, 1, 0], dtype=np.float64)
+            # Gourand shading
             # ----- Perspective-incorrect normal interpolation (flat shading is fine with this) -----
-            n1, n2, n3 = tri_n
-            n = (w0_n[..., None] * n1 +
-                w1_n[..., None] * n2 +
-                w2_n[..., None] * n3)
-
-            # Normalize normals
-            n_norm = -n / np.linalg.norm(n, axis=-1, keepdims=True)
-
-            # ----- Lighting -----
-            light_dir = np.array([0, -1, 0], dtype=np.float64)
-            light_dir /= np.linalg.norm(light_dir)
-            intensity = np.sum(n_norm * light_dir, axis=-1, keepdims=True)
-            intensity = (intensity + 1.0) / 2.0  # -1 → 0, 0 → 0.5, 1 → 1
-            intensity = np.clip(intensity, 0, 1)
             
-            color = (255,255,255)
+            # Do dot product to get how much they are facing the sun
+            n_l = np.dot(tri_n, light_dir)
+            # normalize vals [-1,1] -> [0,1]
+            n_l = (n_l + 1.0) / 2.0
+            # use the 3 normalized barycentric coordinates to choose how much of each light to grab
+            # eg. if we are close to vertex 1 then let's say 80% of the light will be grabbed from
+            # w1_n. The other 10% and 10% are grabbed from the remaining coords.
+            l1_p = np.abs(n_l[0] * w0_n)
+            l2_p = np.abs(n_l[1] * w1_n)
+            l3_p = np.abs(n_l[2] * w2_n)
+            l_p = np.abs(l1_p) + np.abs(l2_p) + np.abs(l3_p)
+            # With our luminance value we can apply it to a color (such as white)
+            
+            # Phong shading
+            # For Phone shading we are going to do similar to above, but instead of interpolating
+            # lightness values, we interpolate normal vectors.
+            # n1, n2, n3 = tri_n
+            
+            # n = (w0_n[..., None] * n1 +
+            #     w1_n[..., None] * n2 +
+            #     w2_n[..., None] * n3)
+
+            # # Normalize normals
+            # n_norm = -n / np.linalg.norm(n, axis=-1, keepdims=True)
+
+            # # ----- Lighting -----
+            # light_dir = np.array([0, -1, 0], dtype=np.float64)
+            # light_dir /= np.linalg.norm(light_dir)
+            # intensity = np.sum(n_norm * light_dir, axis=-1, keepdims=True)
+            # intensity = (intensity + 1.0) / 2.0  # -1 → 0, 0 → 0.5, 1 → 1
+            # intensity = np.clip(intensity, 0, 1)
+            
+            if color[0] != 255 or color[1] != 0 or color[2] != 0:
+                color = (255,255,255)
+            
+            temp = l_p[..., None]
+            
+            temp2 = np.array(color, dtype=np.float64)[:, None]
+            
+            pixel_colors = l_p[..., None] * np.array(color, dtype=np.float64)
 
             # Apply lighting to base color
-            shaded_color = (np.array(color, dtype=np.float64) * intensity).astype(np.uint8)
+            shaded_color = (pixel_colors).astype(np.uint8)
             sub_rgb[update_mask] = shaded_color[update_mask]
         else:
             # No normals → solid fill
@@ -472,7 +503,6 @@ class Renderer:
         C = p1[0]*p2[1] - p1[1]*p2[0]
         return A, B, C
 
-    # 500x500 triangles cost 0.8ms to draw (not great)
     @Profiler.timed()
     def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, tri_n=None, texture_obj: Texture|None=None):
         # p1, p2, p3 = (p1[0], p1[1], p1[2]), (p2[0], p2[1], p2[2]), (p3[0], p3[1], p3[2])
@@ -504,6 +534,7 @@ class Renderer:
         
         # Pixel shading path
         if texture_obj and uv_triplet:
+            # self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
             self._shade_textured(sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj)
         else:
             self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
@@ -553,7 +584,10 @@ class Renderer:
                 tri_uv = None
             
             if obj_frame_data.normal_faces.size > 0:
-                tri_n = (obj_frame_data.normals[obj_frame_data.normal_faces[i][0]], obj_frame_data.normals[obj_frame_data.normal_faces[i][1]], obj_frame_data.normals[obj_frame_data.normal_faces[i][2]])
+                n0_i = obj_frame_data.normal_faces[i][0]
+                n1_i = obj_frame_data.normal_faces[i][1]
+                n2_i = obj_frame_data.normal_faces[i][2]
+                tri_n = (obj_frame_data.object.normals[n0_i], obj_frame_data.object.normals[n1_i], obj_frame_data.object.normals[n2_i])
             else:
                 tri_n = None
 
@@ -605,8 +639,8 @@ class Renderer:
                     render_config.wave_amplitude.val, 
                     render_config.wave_period.val, 
                     render_config.wave_speed.val,
-                    frame_count)
-            obj_frame_data.model_matrix = v.get_model_matrix(r_object)
+                    frame_count, angle)
+            obj_frame_data.model_matrix = v.get_model_matrix(r_object, angle)
             obj_frame_data.clip_space_vertices = v.project_vertices(obj_frame_data.homogeneous_vertices, obj_frame_data.model_matrix, view_matrix, self.projection_matrix)
             obj_frame_data.faces_kept = v.cull_faces(obj_frame_data.clip_space_vertices, r_object.faces)
             V_ndc, inv_w = v.perspective_divide(obj_frame_data.clip_space_vertices)
@@ -757,8 +791,9 @@ class Renderer:
 
             pygame.display.flip()
             self.clock.tick(60)
-            debug_win.render_ui()
-            debug_win.apply_pending_updates()
+            if USING_WINDOWS:
+                debug_win.render_ui()
+                debug_win.apply_pending_updates()
 
         pygame.quit()
     
@@ -767,4 +802,3 @@ if __name__ == "__main__":
     renderer = Renderer()
     renderer.run()
 
-# NOTE ChatGPT (4o for general templates) and Copilot (internally using GPT-4.1) was used in this project.

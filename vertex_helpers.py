@@ -5,15 +5,12 @@ from config import COLOR_WHITE
 from config import global_config
 from renderable_object import RenderableObject
 
-# TODO not supported ATM
-angle = 0.0
-
 import numpy as np
 
 render_config = global_config
 
 @Profiler.timed()
-def apply_vertex_wave_shader(verticies: np.ndarray, amplitude: float, period: float, speed: float, frame_count: int) -> np.ndarray:
+def apply_vertex_wave_shader(verticies: np.ndarray, amplitude: float, period: float, speed: float, frame_count: int, angle: float) -> np.ndarray:
     """
     Applies a sine wave transformation to all vertices in a mesh (vectorized).
 
@@ -109,7 +106,7 @@ def prepare_vertices(obj: RenderableObject) -> np.ndarray:
     return V
 
 @Profiler.timed()
-def get_model_matrix(obj: RenderableObject) -> np.ndarray:
+def get_model_matrix(obj: RenderableObject, angle: float) -> np.ndarray:
     """
     Computes the model transformation matrix for the given object.
 
