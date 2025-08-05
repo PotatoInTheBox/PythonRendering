@@ -445,12 +445,16 @@ class Renderer:
                 w2_n[..., None] * n3)
 
             # Normalize normals
-            n_norm = n / np.linalg.norm(n, axis=-1, keepdims=True)
+            n_norm = -n / np.linalg.norm(n, axis=-1, keepdims=True)
 
             # ----- Lighting -----
-            light_dir = np.array([0, 0, -1], dtype=np.float64)
+            light_dir = np.array([0, -1, 0], dtype=np.float64)
             light_dir /= np.linalg.norm(light_dir)
-            intensity = np.clip(np.sum(n_norm * light_dir, axis=-1, keepdims=True), 0, 1)
+            intensity = np.sum(n_norm * light_dir, axis=-1, keepdims=True)
+            intensity = (intensity + 1.0) / 2.0  # -1 → 0, 0 → 0.5, 1 → 1
+            intensity = np.clip(intensity, 0, 1)
+            
+            color = (255,255,255)
 
             # Apply lighting to base color
             shaded_color = (np.array(color, dtype=np.float64) * intensity).astype(np.uint8)
