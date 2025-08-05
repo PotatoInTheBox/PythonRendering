@@ -4,6 +4,18 @@ from typing import Generic, TypeVar
 
 import numpy as np
 
+# TODO fix duplicate
+# ========== Common Colors ==========
+COLOR_BLACK = (0, 0, 0)
+COLOR_RED = (255, 0, 0)
+COLOR_GREEN = (0, 255, 0)
+COLOR_BLUE = (0, 0, 255)
+COLOR_WHITE = (255, 255, 255)
+COLOR_DARK_GRAY = (50, 50, 50)
+COLOR_PINK = (255, 105, 180)
+COLOR_SLATE_BLUE = (50, 50, 120)
+
+
 T = TypeVar('T')
 
 class ConfigEntry(Generic[T]):
@@ -77,4 +89,4 @@ class Config:
 
 
 # Global instance
-config = Config()
+global_config = Config()

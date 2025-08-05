@@ -18,12 +18,16 @@
 import profiler
 from profiler import Profiler
 from renderable_object import RenderableObject
+from object_frame_data import ObjectFrameData
 from texture import Texture
 from transform import Transform
 from debug_window import DebugWindow
 from config import Config
 from config import ConfigEntry
+from config import global_config
+import vertex_helpers as v
 import debug as debug
+
 
 import pygame
 import sys
@@ -31,14 +35,15 @@ import ctypes
 import cv2
 from skimage.draw import line
 import numpy as np
-from typing import List, Tuple
+from typing import Any, List, Optional, Tuple
+from numpy.typing import NDArray
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
     ctypes.windll.user32.SetProcessDPIAware()
     
 # Prepare the config data
 # TODO move as many settings as possible into the config
-render_config = Config()
+render_config = global_config
 debug_win = DebugWindow()
 
 # ========== Camera settings ==========
@@ -84,7 +89,7 @@ debug_win.create_debug_label("Camera Rotation", render_config.camera_rotation)
 # RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ]  # all the objects we want rendered
 # RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
 # RENDER_OBJECTS = [NAME_OBJ]
-RENDER_OBJECTS = [FLOOR_OBJ]
+RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -95,6 +100,8 @@ FRAME_LOG_INTERVAL = 60  # log once per 60 frames
 DRAW_PIXEL_BORDER = True  # Toggle to draw a border around pixels
 PIXEL_BORDER_SIZE = 1  # Size of the pixel border
 
+# ========== Rendering modes ==========
+
 # ========== Common Colors ==========
 COLOR_BLACK = (0, 0, 0)
 COLOR_RED = (255, 0, 0)
@@ -104,8 +111,6 @@ COLOR_WHITE = (255, 255, 255)
 COLOR_DARK_GRAY = (50, 50, 50)
 COLOR_PINK = (255, 105, 180)
 COLOR_SLATE_BLUE = (50, 50, 120)
-
-# ========== Rendering modes ==========
 
 # ========== Global variables ==========
 angle = 0
@@ -360,144 +365,144 @@ class Renderer:
             for x in range(center[0] - radius, center[0] + radius):
                 if self._is_bounded((x, y)) and (y - center[1])**2 + (x - center[0])**2 < sqrt_limit:
                     self.rgb_buffer[y][x] = color
-
-    # 500x500 triangles cost 0.8ms to draw (not great)
-    @Profiler.timed()
-    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, texture_obj: Texture|None=None):
-        Profiler.profile_accumulate_start("fill_triangle: prepare calculations")
+    
+    def _prepare_triangle(self, p1, p2, p3):
         p1 = (p1[0], p1[1], -p1[2])
         p2 = (p2[0], p2[1], -p2[2])
         p3 = (p3[0], p3[1], -p3[2])
-        # NOTE: TODO: WARNING: Watch out for negative numbers. Often you may have to flip values.
-        # eg. Barycentric coordinates are inside triangle if all are negative, this also means all teh values have a negative sign.
-        # So multiplying them means getting a value that also has a negative sign (eg. colors)
-        def cross(a, b, c):
-            # Computes twice the signed area of triangle abc.
-            # Used to calculate barycentric coordinates and inside-triangle tests.
-            return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
-        
-        area = cross(p1, p2, p3)  # Precompute this outside the loop
-        if area == 0:
-            return  # skip degenerate triangle
-        inv_area = 1 / area
-
-        # Compute integer bounding box of the triangle, clipped to screen size
+        area = self._edge_fn(p1, p2, p3)
+        return area != 0
+    
+    def _compute_pixel_grid(self, p1, p2, p3):
         min_x = max(int(min(p1[0], p2[0], p3[0])), 0)
         max_x = min(int(max(p1[0], p2[0], p3[0])), self.grid_size_x - 1)
         min_y = max(int(min(p1[1], p2[1], p3[1])), 0)
         max_y = min(int(max(p1[1], p2[1], p3[1])), self.grid_size_y - 1)
-        
-        if min_x > max_x or min_y > max_y:
-            return  # Triangle is completely outside screen bounds
-        
-        # Create grid of pixel centers for the bounding box
         xs = np.arange(min_x, max_x + 1)
         ys = np.arange(min_y, max_y + 1)
-        X, Y = np.meshgrid(xs, ys)  # X and Y arrays represent pixel coordinates
-        
-        # Compute edge function coefficients: E(x, y) = A*x + B*y + C
-        # Each edge function checks whether a point is to the left or right of an edge
-        def edge_coeffs(p1, p2):
-            A = p1[1] - p2[1]
-            B = p2[0] - p1[0]
-            C = p1[0]*p2[1] - p1[1]*p2[0]
-            return A, B, C
-        
-        Profiler.profile_accumulate_end("fill_triangle: prepare calculations")
+        return min_x, max_x, min_y, max_y, *np.meshgrid(xs, ys)
 
-        Profiler.profile_accumulate_start("fill_triangle: calc edge coeffs")
-        A0, B0, C0 = edge_coeffs(p2, p3)
-        A1, B1, C1 = edge_coeffs(p3, p1)
-        A2, B2, C2 = edge_coeffs(p1, p2)
-        Profiler.profile_accumulate_end("fill_triangle: calc edge coeffs")
-        
-        Profiler.profile_accumulate_start("fill_triangle: calc barycentric coords")
-        # Compute edge function values for all pixels at once (vectorized)
+    def _compute_barycentrics(self, X, Y, p1, p2, p3):
+        area = self._edge_fn(p1, p2, p3)
+        inv_area = 1 / area
+        A0, B0, C0 = self._edge_coeffs(p2, p3)
+        A1, B1, C1 = self._edge_coeffs(p3, p1)
+        A2, B2, C2 = self._edge_coeffs(p1, p2)
         w0 = A0 * X + B0 * Y + C0
         w1 = A1 * X + B1 * Y + C1
         w2 = A2 * X + B2 * Y + C2
-        
-        # Mask of pixels inside the triangle: all edge signs match (either all >= 0 or all <= 0)
-        mask = ((w0 <= 0) & (w1 <= 0) & (w2 <= 0))  # | ((w0 >= 0) & (w1 >= 0) & (w2 >= 0)) 
-        
-        # Compute barycentric coordinates by normalizing edge function values
-        w0_n = w0 * inv_area
-        w1_n = w1 * inv_area
-        w2_n = w2 * inv_area
-        Profiler.profile_accumulate_end("fill_triangle: calc barycentric coords")
-        
-        Profiler.profile_accumulate_start("fill_triangle: fill pixels")
-        
-        # Normalize the base color (255,255,255 -> [1,1,1], 128,128,128 -> [0.5,0.5,0.5])
-        base_color_factor = np.array(color) / 255.0  # shape (3,)
-        
-        # If p1 is Red, p2 is Green, p3 is Blue
-        color_map = (w0_n[..., None] * -(np.array(COLOR_RED)) +  # p1
-                    w1_n[..., None]  * -(np.array(COLOR_GREEN)) +  # p2
-                    w2_n[..., None] * -(np.array(COLOR_BLUE)))   # p3
-        
-        # Apply shading (element-wise multiply with base color factor)
-        final_color = color_map * base_color_factor  # still float
-        
-        # Clip and convert to uint8
-        final_color = np.clip(final_color, 0, 255).astype(np.uint8)
+        mask = ((w0 <= 0) & (w1 <= 0) & (w2 <= 0))
+        return w0, w1, w2, inv_area, mask
 
-        # Interpolate z-values for all pixels (depth calculation)
-        z = w0_n * p1[2] + w1_n * p2[2] + w2_n * p3[2]
+    def _shade_textured(self, sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj):
+        # ----- Perspective-correct UV interpolation -----
+        (u1, v1), (u2, v2), (u3, v3) = uv_triplet
+        inv_w1, inv_w2, inv_w3 = tri_inv_w
+        u_w = w0_n * u1 * inv_w1 + w1_n * u2 * inv_w2 + w2_n * u3 * inv_w3
+        v_w = w0_n * v1 * inv_w1 + w1_n * v2 * inv_w2 + w2_n * v3 * inv_w3
+
+        # Shared perspective correction factor
+        inv_w = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
+
+        # Apply perspective correction
+        u = u_w / inv_w
+        v = v_w / inv_w
+
+        # ----- Texture sampling -----
+        tex_x = np.clip((u * texture_obj.width).astype(np.int32), 0, texture_obj.width - 1)
+        tex_y = np.clip((v * texture_obj.height).astype(np.int32), 0, texture_obj.height - 1)
+        sampled = (texture_obj.image[tex_y, tex_x] * 255.0).astype(np.uint8)
+
+        if tri_n is not None:
+            # ----- Perspective-correct normal interpolation -----
+            n1, n2, n3 = tri_n
+            n1_w = n1 * inv_w1
+            n2_w = n2 * inv_w2
+            n3_w = n3 * inv_w3
+            n_w = (w0_n[..., None] * n1_w +
+                w1_n[..., None] * n2_w +
+                w2_n[..., None] * n3_w)
+            n = n_w / inv_w[..., None]
+            n_norm = n / np.linalg.norm(n, axis=-1, keepdims=True)
+
+            # ----- Lighting (basic diffuse) -----
+            light_dir = np.array([0, 0, -1])  # Example: directional light from camera
+            intensity = np.clip(np.sum(n_norm * light_dir, axis=-1, keepdims=True), 0, 1)
+            sampled = (sampled * intensity).astype(np.uint8)
+
+        sub_rgb[update_mask] = sampled[update_mask]
+
+    # TODO I'm completely misunderstanding shading.
+    def _shade_flat(self, sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n=None):
+        """
+        Flat shading. Supports optional per-vertex normals for lighting.
+        """
+        if tri_n is not None:
+            # ----- Perspective-incorrect normal interpolation (flat shading is fine with this) -----
+            n1, n2, n3 = tri_n
+            n = (w0_n[..., None] * n1 +
+                w1_n[..., None] * n2 +
+                w2_n[..., None] * n3)
+
+            # Normalize normals
+            n_norm = n / np.linalg.norm(n, axis=-1, keepdims=True)
+
+            # ----- Lighting -----
+            light_dir = np.array([0, 0, -1], dtype=np.float64)
+            light_dir /= np.linalg.norm(light_dir)
+            intensity = np.clip(np.sum(n_norm * light_dir, axis=-1, keepdims=True), 0, 1)
+
+            # Apply lighting to base color
+            shaded_color = (np.array(color, dtype=np.float64) * intensity).astype(np.uint8)
+            sub_rgb[update_mask] = shaded_color[update_mask]
+        else:
+            # No normals → solid fill
+            sub_rgb[update_mask] = color
+
+    def _edge_fn(self, a, b, c):
+        return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
+
+    def _edge_coeffs(self, p1, p2):
+        A = p1[1] - p2[1]
+        B = p2[0] - p1[0]
+        C = p1[0]*p2[1] - p1[1]*p2[0]
+        return A, B, C
+
+    # 500x500 triangles cost 0.8ms to draw (not great)
+    @Profiler.timed()
+    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, tri_n=None, texture_obj: Texture|None=None):
+        # p1, p2, p3 = (p1[0], p1[1], p1[2]), (p2[0], p2[1], p2[2]), (p3[0], p3[1], p3[2])
+        # NOTE: TODO: WARNING: Watch out for negative numbers. Often you may have to flip values.
+        # eg. Barycentric coordinates are inside triangle if all are negative, this also means all teh values have a negative sign.
+        # So multiplying them means getting a value that also has a negative sign (eg. colors)
+        # def cross(a, b, c):
+        #     # Computes twice the signed area of triangle abc.
+        #     # Used to calculate barycentric coordinates and inside-triangle tests.
+        #     return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
         
-        # Extract sub-region of z-buffer and color buffer that corresponds to the bounding box
+        area = self._edge_fn(p1, p2, p3)
+        if area == 0: return  # skip degenerate triangle
+
+        # Bounding box and pixel grid
+        min_x, max_x, min_y, max_y, X, Y = self._compute_pixel_grid(p1, p2, p3)
+        if min_x > max_x or min_y > max_y: return  # Triangle is completely outside screen bounds
+
+        # Barycentric weights
+        w0, w1, w2, inv_area, mask = self._compute_barycentrics(X, Y, p1, p2, p3)
+        w0_n, w1_n, w2_n = w0 * inv_area, w1 * inv_area, w2 * inv_area
+        
+        # Z-depth buffer
+        z = w0_n * p1[2] + w1_n * p2[2] + w2_n * p3[2]
         sub_zbuffer = self.z_buffer[min_y:max_y+1, min_x:max_x+1]
         sub_rgb = self.rgb_buffer[min_y:max_y+1, min_x:max_x+1]
-
-        # Create mask for pixels that pass both the inside-triangle test and the z-buffer test
         update_mask = mask & (z < sub_zbuffer)
-        
-        # Update z-buffer and color buffer in one vectorized operation
         sub_zbuffer[update_mask] = z[update_mask]
         
-        # TODO I have literally no clue why this works....
-        if texture_obj is not None and uv_triplet is not None:
-            (u1, v1), (u2, v2), (u3, v3) = uv_triplet
-
-            inv_w1, inv_w2, inv_w3 = tri_inv_w
-
-            # u/w per vertex
-            u1w = u1 * inv_w1
-            u2w = u2 * inv_w2
-            u3w = u3 * inv_w3
-
-            # v/w per vertex
-            v1w = v1 * inv_w1
-            v2w = v2 * inv_w2
-            v3w = v3 * inv_w3
-
-            # Interpolate perspective-correct values
-            u_w = w0_n * u1w + w1_n * u2w + w2_n * u3w
-            v_w = w0_n * v1w + w1_n * v2w + w2_n * v3w
-            inv_w = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
-
-            # Final UVs
-            u = u_w / inv_w
-            v = v_w / inv_w
-            
-            u = np.nan_to_num(u, nan=0.0)
-            v = np.nan_to_num(v, nan=0.0)
-
-            # Map to pixel indices
-            tex_x = (u * texture_obj.width).astype(np.int32)
-            tex_y = (v * texture_obj.height).astype(np.int32)
-            tex_x = np.clip(tex_x, 0, texture_obj.width - 1)
-            tex_y = np.clip(tex_y, 0, texture_obj.height - 1)
-
-            # Sample and write
-            sampled_color = texture_obj.image[tex_y, tex_x] * 255.0
-            sub_rgb[update_mask] = sampled_color[update_mask]
+        # Pixel shading path
+        if texture_obj and uv_triplet:
+            self._shade_textured(sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj)
         else:
-            # sub_rgb[update_mask] = final_color[update_mask]
-            sub_rgb[update_mask] = color
-        
-        
-        Profiler.profile_accumulate_end("fill_triangle: fill pixels")
+            self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
@@ -511,349 +516,7 @@ class Renderer:
         self.draw_line_skimage(p3, p1, color)
     
     @Profiler.timed()
-    def apply_vertex_wave_shader(self, verticies: np.ndarray, amplitude: float, period: float, speed: float) -> np.ndarray:
-        """
-        Applies a sine wave transformation to all vertices in a mesh (vectorized).
-
-        This function simulates a "wave shader" by offsetting the Y-coordinate
-        of each vertex using a sine function. It operates on all vertices at once
-        for efficiency using NumPy.
-
-        Parameters:
-            verticies (np.ndarray): 
-                Array of shape (N, 4) containing homogeneous vertex positions.
-            amplitude (float): 
-                Maximum wave height. Larger values create taller waves.
-            period (float): 
-                Frequency of the wave. Larger values create shorter wavelengths.
-            speed (float): 
-                Speed factor controlling how the wave changes over time.
-
-        Returns:
-            np.ndarray:
-                The transformed vertices with applied Y-axis wave offset (shape (N, 4)).
-
-        Notes:
-            - This function builds a unique translation matrix for each vertex
-            (shape (N, 4, 4)) and applies it using batch matrix multiplication.
-            - The wave displacement is computed as:
-                offset = sin((x + frame_count * speed) * period) * amplitude
-            - Vectorized using NumPy for efficiency (no Python loops).
-        """
-        # TODO abstract this further somehow. This is per vertex instead of an entire
-        # object so it's a bit weird.
-        # Add vertex wave shader
-        x_pos = verticies[:, 0]
-        # Calculate the wave offsets for all vertices at once
-        offsets = np.sin((x_pos + frame_count * speed) * period) * amplitude  # shape (N,)
-        # Build a translation matrix for each vertex: shape (N, 4, 4)
-        translations = np.array([
-            [[1, 0, 0, 0],
-            [0, 1, 0, offset],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]] for offset in offsets
-        ])
-        # Multiply each vertex (shape (N,4,1)) by its translation matrix (N,4,4)
-        V_h = verticies[:, :, None]  # (N,4,1)
-        V_transformed = np.matmul(translations, V_h)  # (N,4,1)
-        verticies = V_transformed[:, :, 0]  # (N,4)
-        return verticies
-    
-    @Profiler.timed()
-    def compute_view_matrix(self):
-        """
-        Computes the camera view matrix from camera rotation and position.
-
-        Returns:
-            np.ndarray:
-                A 4x4 view transformation matrix (rotation and translation).
-        """
-        pitch, yaw, roll = render_config.camera_rotation.val
-        R_cam = Transform().with_rotation([pitch, yaw, roll])
-        R_view = R_cam.get_matrix().T  # inverse of rotation matrix is transpose            
-
-        # R_view must be 4d in order to be used in the matrix
-        R_view_4d = np.eye(4)
-        R_view_4d[:3, :3] = R_view[:3, :3]
-
-        # Translation to move world relative to camera
-        T_view = np.eye(4)
-        camera_pos = np.array(render_config.camera_position.val)
-        T_view[:3, 3] = -camera_pos
-
-        # View matrix = rotation * translation
-        view_matrix = R_view_4d @ T_view
-        return view_matrix
-    
-    @Profiler.timed()
-    def prepare_vertices(self, obj: RenderableObject) -> np.ndarray:
-        """
-        Converts object vertices into homogeneous coordinates.
-
-        Parameters:
-            obj (RenderableObject):
-                The object containing vertex positions as (N, 3).
-
-        Returns:
-            np.ndarray:
-                Vertex array in homogeneous coordinates of shape (N, 4).
-        """
-        # Assuming: vertex_list = [(x, y, z), ...]
-        V = np.array(obj.vertices)  # Shape: (N, 3)
-
-        # Add homogeneous coordinate
-        # TODO possibly implement column-vector
-        V = np.hstack([V, np.ones((V.shape[0], 1))])  # Shape: (N, 4)
-        return V
-    
-    @Profiler.timed()
-    def get_model_matrix(self, obj: RenderableObject) -> np.ndarray:
-        """
-        Computes the model transformation matrix for the given object.
-
-        Parameters:
-            obj (RenderableObject):
-                The renderable object whose transform is used.
-
-        Returns:
-            np.ndarray:
-                A 4x4 model transformation matrix.
-        """
-        # ========= MODEL SPACE → WORLD SPACE =========
-        # Create a matrix for rotating the model.
-        ROTATED_MODEL = obj.transform.copy()
-        ROTATED_MODEL.rotate([angle, angle, 0])
-        # Use our newly completed matrix for future calculations.
-        model_matrix = ROTATED_MODEL.get_matrix()
-        return model_matrix
-    
-    @Profiler.timed()
-    def project_vertices(self, V_model: np.ndarray, model_matrix: np.ndarray, view_matrix: np.ndarray, projection_matrix: np.ndarray):
-        """
-        Projects vertices from model space into clip space.
-
-        Parameters:
-            V_model (np.ndarray):
-                Homogeneous model-space vertices (N, 4).
-            model_matrix (np.ndarray):
-                Model transformation matrix (4x4).
-            view_matrix (np.ndarray):
-                View transformation matrix (4x4).
-            projection_matrix (np.ndarray):
-                Projection matrix (4x4).
-
-        Returns:
-            np.ndarray:
-                Vertices in clip space (N, 4).
-        """
-        # Combine all transforms into a single 4x4 matrix
-        M = projection_matrix @ view_matrix @ model_matrix
-
-        # ========= MODEL → CLIP SPACE =========
-        V_clip = (M @ V_model.T).T  # Shape: (N, 4)
-
-        return V_clip
-    
-    @Profiler.timed()
-    def cull_faces(self, V_clip: np.ndarray, faces: np.ndarray):
-        """
-        Performs frustum and backface culling on faces using clip-space coordinates.
-
-        Parameters:
-            V_clip (np.ndarray):
-                Clip-space vertex positions (N, 4).
-            faces (np.ndarray):
-                Face indices referencing vertices (F, 3).
-
-        Returns:
-            np.ndarray:
-                Boolean mask of length F, where True means face is kept.
-        """
-        verts = V_clip[faces]  # (F, 3, 4)
-
-        # 1. ANY vertex behind camera (z <= 0) → drop
-        behind_camera = (verts[..., 3] <= 0).any(axis=1)
-
-        # 2. ALL vertices outside clip bounds → drop
-        abs_coords = np.abs(verts[..., :3])  # (F, 3, 3)
-        # outside_clip = (abs_coords > verts[..., [3]]).all(axis=(1, 2))
-        
-        x, y, z, w = verts[..., 0], verts[..., 1], verts[..., 2], verts[..., 3]
-
-        # Check each plane
-        outside_left   = (x < -w)
-        outside_right  = (x >  w)
-        outside_bottom = (y < -w)
-        outside_top    = (y >  w)
-        outside_near   = (z < -w)
-        outside_far    = (z >  w)
-
-        # Face fully outside if all vertices are outside the same plane
-        fully_outside = (
-            outside_left.all(axis=1) |
-            outside_right.all(axis=1) |
-            outside_bottom.all(axis=1) |
-            outside_top.all(axis=1) |
-            outside_near.all(axis=1) |
-            outside_far.all(axis=1)
-        )
-        
-        CLIP_ANY_OUTSIDE = False
-        
-        if CLIP_ANY_OUTSIDE:
-            # Drop faces if ANY vertex is outside clip bounds
-            outside_clip_any = (abs_coords > verts[..., [3]]).any(axis=(1, 2))
-        
-        # Compute normals in clip space
-        a = verts[:, 1, :3] / verts[:, 1, [3]] - verts[:, 0, :3] / verts[:, 0, [3]]
-        b = verts[:, 2, :3] / verts[:, 2, [3]] - verts[:, 0, :3] / verts[:, 0, [3]]
-        normals = np.cross(a, b)
-        normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-8)
-        
-        backfacing = normals[:, 2] < 0  # Facing -Z means away from camera → drop
-
-        # Faces to keep
-        faces_kept = ~(behind_camera | fully_outside | backfacing)
-        return faces_kept
-    
-    @Profiler.timed()
-    def perspective_divide(self, V_clip: np.ndarray) -> Tuple[np.ndarray,np.ndarray]:
-        """
-        Converts vertices from clip space to normalized device coordinates (NDC).
-
-        Parameters:
-            V_clip (np.ndarray):
-                Clip-space vertex positions (N, 4).
-
-        Returns:
-            np.ndarray:
-                NDC positions (N, 3), after dividing by w.
-        """
-        # Perspective divide
-        V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
-        inv_w = 1.0 / V_clip[:, 3:4]
-        return V_ndc, inv_w
-
-
-    @Profiler.timed()
-    def compute_world_vertices(self, V_model: np.ndarray, model_matrix: np.ndarray) -> np.ndarray:
-        """
-        Transforms model-space vertices into world space.
-
-        Parameters:
-            V_model (np.ndarray):
-                Homogeneous model-space vertices (N, 4).
-            model_matrix (np.ndarray):
-                Model transformation matrix (4x4).
-
-        Returns:
-            np.ndarray:
-                World-space vertex positions (N, 3).
-        """
-        # ========= MODEL → WORLD FOR LIGHTING =========
-        V_world = (model_matrix @ V_model.T).T[:, :3]  # apply model matrix, ignore w
-        return V_world
-    
-    @Profiler.timed()
-    def compute_world_triangles(self, V_world: np.ndarray, faces: np.ndarray) -> np.ndarray:
-        """
-        Retrieves triangles from world-space vertices using face indices.
-
-        Parameters:
-            V_world (np.ndarray):
-                World-space vertices (N, 3).
-            faces (np.ndarray):
-                Face indices (F, 3).
-
-        Returns:
-            np.ndarray:
-                Triangles in world space of shape (F, 3, 3).
-        """
-        tri_world = V_world[faces]
-        return tri_world
-    
-    @Profiler.timed()
-    def compute_normals(self, tri_world: np.ndarray) -> np.ndarray:
-        """
-        Computes normalized face normals for triangles.
-
-        Parameters:
-            tri_world (np.ndarray):
-                Triangles in world space (F, 3, 3).
-
-        Returns:
-            np.ndarray:
-                Unit normals for each face (F, 3).
-        """
-        # Precompute all normals of all faces
-        a = tri_world[:,1] - tri_world[:,0]  # (N, 3)
-        b = tri_world[:,2] - tri_world[:,0]  # (N, 3)
-        normals = np.cross(a, b)
-        normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
-        return normals
-    
-    @Profiler.timed()
-    def compute_lighting(self, normals: np.ndarray, light: np.ndarray) -> np.ndarray:
-        """
-        Computes per-face lighting using Lambertian shading.
-
-        Parameters:
-            normals (np.ndarray):
-                Normalized face normals (F, 3).
-            light (np.ndarray):
-                Directional light vector (3,).
-
-        Returns:
-            np.ndarray:
-                Per-face colors based on light intensity (F, 3).
-        """
-        # precompute the brightness of all faces
-        # Mapped from [-1,1] -> [0,1] so that faces not facing the light
-        # still slightly light up.
-        brightness = np.clip((normals @ light + 1) / 2, 0, 1)
-
-        # precompute colors of all faces
-        colors = (brightness[:, None] * COLOR_WHITE).astype(int)
-        return colors
-    
-    @Profiler.timed()
-    def ndc_to_screen(self, V_ndc: np.ndarray, faces: np.ndarray) -> np.ndarray:
-        """
-        Converts NDC coordinates of vertices to screen-space coordinates.
-
-        Parameters:
-            V_ndc (np.ndarray):
-                Normalized device coordinates (N, 3).
-            faces (np.ndarray):
-                Face indices (F, 3).
-
-        Returns:
-            np.ndarray:
-                Triangles in screen space of shape (F, 3, 3), where each vertex has (x, y, z).
-        """
-        faces = faces  # Shape (F, 3)
-        tri_ndc_all = V_ndc[faces]  # Shape (F, 3, 3) —  F faces, 3 verts each, 3 coords each
-        # ========= NDC → SCREEN SPACE =========
-        # Precompute screen space
-        # Extract x, y, z (NDC space)
-        xy = tri_ndc_all[:, :, :2]  # (F, 3, 2)
-        # z = tri_ndc_all[:, :, 2]    # (F, 3)
-        z = -tri_ndc_all[:, :, 2]  # flip the z because somewhere in my logic i flipped it a long time ago
-
-        # Convert x, y to screen coordinates
-        grid_x = self.grid_size_x
-        grid_y = self.grid_size_y
-        xy_screen = np.empty_like(xy)
-        xy_screen[:, :, 0] = ((xy[:, :, 0] + 1) * 0.5 * grid_x).astype(int)
-        xy_screen[:, :, 1] = ((1 - (xy[:, :, 1] + 1) * 0.5) * grid_y).astype(int)
-
-        # Combine x, y, z back
-        tri_screen = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
-        
-        return tri_screen
-    
-    @Profiler.timed()
-    def draw_faces(self, tri_screen_all: np.ndarray, colors: np.ndarray, faces: np.ndarray, uv_coords: np.ndarray, uv_faces: np.ndarray, inv_w: np.ndarray, texture_obj: Texture|None=None):
+    def draw_faces(self, obj_frame_data: ObjectFrameData):
         """
         Draws triangles on the screen with optional wireframe or filled faces.
 
@@ -868,22 +531,27 @@ class Renderer:
         global hover_triangle_index
         hover_triangle_index = -1
         # ========= DRAWING =========
-        for i, face in enumerate(faces):
-            tri_screen = tri_screen_all[i]
+        for i, face in enumerate(obj_frame_data.faces):
+            tri_screen = obj_frame_data.screen_space_triangles[i]
             if draw_lines:
                 self.draw_triangle_with_z(tri_screen[0][0:3], tri_screen[1][0:3], tri_screen[2][0:3], COLOR_GREEN)
-        for i, face in enumerate(faces):
+        for i, face in enumerate(obj_frame_data.faces):
             Profiler.profile_accumulate_start("draw_faces: project")
 
             # apply light to this face
-            color = colors[i]
+            color = obj_frame_data.colors[i]
 
-            tri_screen = tri_screen_all[i]
-            tri_inv_w = inv_w[face]
-            if uv_faces.size > 0:
-                tri_uv = (uv_coords[uv_faces[i][0]], uv_coords[uv_faces[i][1]], uv_coords[uv_faces[i][2]])
+            tri_screen = obj_frame_data.screen_space_triangles[i]
+            tri_inv_w = obj_frame_data.inverse_w[face]
+            if obj_frame_data.uv_faces.size > 0:
+                tri_uv = (obj_frame_data.uv_coords[obj_frame_data.uv_faces[i][0]], obj_frame_data.uv_coords[obj_frame_data.uv_faces[i][1]], obj_frame_data.uv_coords[obj_frame_data.uv_faces[i][2]])
             else:
                 tri_uv = None
+            
+            if obj_frame_data.normal_faces.size > 0:
+                tri_n = (obj_frame_data.normals[obj_frame_data.normal_faces[i][0]], obj_frame_data.normals[obj_frame_data.normal_faces[i][1]], obj_frame_data.normals[obj_frame_data.normal_faces[i][2]])
+            else:
+                tri_n = None
 
             # global hover_triangle_index
             if point_in_triangle((mouse_x, mouse_y), tri_screen[0], tri_screen[1], tri_screen[2]):
@@ -894,7 +562,7 @@ class Renderer:
             Profiler.profile_accumulate_start("draw_faces: draw")
 
             if do_draw_faces or draw_z_buffer:
-                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], tri_inv_w, color, tri_uv, texture_obj) # type: ignore
+                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], tri_inv_w, color, tri_uv, tri_n, obj_frame_data.texture) # type: ignore
             # if draw_lines:
             #     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
 
@@ -919,37 +587,45 @@ class Renderer:
         # This means the light will look like it's going down even though the matrix points up.
         light = np.array([0, 1, 0])
 
-        view_matrix = self.compute_view_matrix()
+        view_matrix = v.compute_view_matrix()
 
         for r_object in self.objects:
             Profiler.profile_accumulate_start("draw_polygons: pre_compute")
-            V_model = self.prepare_vertices(r_object)
+            obj_frame_data = ObjectFrameData(r_object)
+            obj_frame_data.texture = r_object.texture
+            obj_frame_data.uv_coords = r_object.uv_coords
+            obj_frame_data.homogeneous_vertices = v.prepare_vertices(r_object)
             if DO_WAVE_SHADER:
-                V_model = self.apply_vertex_wave_shader(
-                    V_model, 
+                obj_frame_data.homogeneous_vertices = v.apply_vertex_wave_shader(
+                    obj_frame_data.homogeneous_vertices, 
                     render_config.wave_amplitude.val, 
                     render_config.wave_period.val, 
-                    render_config.wave_speed.val)
-            model_matrix = self.get_model_matrix(r_object)
-            V_clip = self.project_vertices(V_model, model_matrix, view_matrix, self.projection_matrix)
-            faces_kept = self.cull_faces(V_clip, r_object.faces)
-            V_ndc, inv_w = self.perspective_divide(V_clip)
+                    render_config.wave_speed.val,
+                    frame_count)
+            obj_frame_data.model_matrix = v.get_model_matrix(r_object)
+            obj_frame_data.clip_space_vertices = v.project_vertices(obj_frame_data.homogeneous_vertices, obj_frame_data.model_matrix, view_matrix, self.projection_matrix)
+            obj_frame_data.faces_kept = v.cull_faces(obj_frame_data.clip_space_vertices, r_object.faces)
+            V_ndc, inv_w = v.perspective_divide(obj_frame_data.clip_space_vertices)
+            obj_frame_data.ndc_vertices = V_ndc
+            obj_frame_data.inverse_w = inv_w
+            obj_frame_data.world_vertices = v.compute_world_vertices(obj_frame_data.homogeneous_vertices, obj_frame_data.model_matrix)
+            obj_frame_data.world_space_triangles = v.compute_world_triangles(obj_frame_data.world_vertices, r_object.faces)
+            obj_frame_data.normals = v.compute_normals(obj_frame_data.world_space_triangles)
+            obj_frame_data.colors = v.compute_lighting(obj_frame_data.normals, light)
 
-            V_world = self.compute_world_vertices(V_model, model_matrix)
-            tri_world = self.compute_world_triangles(V_world, r_object.faces)
-            normals = self.compute_normals(tri_world)
-            colors = self.compute_lighting(normals, light)
-            colors = colors[faces_kept]  # keep only faces kept
-
-            faces = r_object.faces[faces_kept]   # keep only faces kept
-            if r_object.uv_faces.shape[0] == faces_kept.shape[0]:
-                uv_faces = r_object.uv_faces[faces_kept]
+            obj_frame_data.colors = obj_frame_data.colors[obj_frame_data.faces_kept]  # keep only faces kept
+            obj_frame_data.faces = r_object.faces[obj_frame_data.faces_kept]   # keep only faces kept
+            obj_frame_data.normal_faces = r_object.normal_faces[obj_frame_data.faces_kept]  # keep only faces kept
+            if r_object.uv_faces.shape[0] == obj_frame_data.faces_kept.shape[0] and r_object.uv_coords.size > 0:
+                obj_frame_data.uv_faces = r_object.uv_faces[obj_frame_data.faces_kept]  # keep only faces kept
             else:
-                uv_faces = np.empty((0, 3, 2))
-            tri_screen_all = self.ndc_to_screen(V_ndc, faces)
+                # If the UV face array length matches the original face array length, 
+                # I can safely filter them with the same mask.
+                # Otherwise, I have no clue, so I’ll just give an empty placeholder.
+                obj_frame_data.uv_faces = np.empty((0, 3), dtype=np.int32) # type: ignore
+            obj_frame_data.screen_space_triangles = v.ndc_to_screen(obj_frame_data.ndc_vertices, obj_frame_data.faces, self.grid_size_x, self.grid_size_y)
             Profiler.profile_accumulate_end("draw_polygons: pre_compute")
-            
-            self.draw_faces(tri_screen_all, colors, faces, r_object.uv_coords, uv_faces, inv_w, r_object.texture)
+            self.draw_faces(obj_frame_data)
 
     @Profiler.timed("render_buffer")
 
@@ -1081,6 +757,7 @@ class Renderer:
             debug_win.apply_pending_updates()
 
         pygame.quit()
+    
 
 if __name__ == "__main__":
     renderer = Renderer()
