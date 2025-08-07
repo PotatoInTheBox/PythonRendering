@@ -16,149 +16,64 @@ class ObjectFrameData:
     def __init__(self, renderable_object: "RenderableObject"):
         # Properties that cannot be None before being used.
         self.object: "RenderableObject" = renderable_object
-        self._homogeneous_vertices: Optional[NDArray[np.float64]] = None
-        self._model_matrix: Optional[NDArray[np.float64]] = None  # shape (4, 4)
-        self._clip_space_vertices: Optional[NDArray[np.float64]] = None
-        self._faces_kept: Optional[NDArray[np.bool]] = None
-        self._ndc_vertices: Optional[NDArray[np.float64]] = None
-        self._inverse_w: Optional[NDArray[np.float64]] = None
-        self._world_vertices: Optional[NDArray[np.float64]] = None
-        self._world_space_triangles: Optional[NDArray[np.float64]] = None
-        self._normals: Optional[NDArray[np.float64]] = None
-        self._faces: Optional[NDArray[np.int32]] = None
-        self._uv_faces: Optional[NDArray[np.int32]] = None
-        self._screen_space_triangles: Optional[NDArray[np.float64]] = None
-        self._normal_faces: Optional[NDArray[np.int32]] = None
+        """Original object. Vertices and normals (if any) are at object space here."""
+        self.model_matrix: NDArray[np.float64] = None # type: ignore  # shape (4, 4)
+        """A `model matrix` to apply to the vertices and normal vertices.\n
+        Usually, this will be in combination with the `view matrix` since we don't need
+        world space (we can do our math in view space instead)."""
+        self.homogeneous_vertices: NDArray[np.float64] = None # type: ignore
+        """Convert our vertices to a `4d` shape. This allows it to have a `w` component
+        which helps calculate the perspective divide."""
+        self.world_vertices: NDArray[np.float64] = None # type: ignore
+        """Marked for removal"""
+        self.clip_space_vertices: NDArray[np.float64] = None # type: ignore
+        """Clip space has our vertices after the perspective transform. But without
+        perspective divide. We cannot yet use it for drawing to the screen (perspective
+        divide needed first). We can still use it for interpolating triangles (since
+        their shape will still be the same). We can also use it to clip out of bounds
+        components."""
+        self.ndc_vertices: NDArray[np.float64] = None # type: ignore
+        """NDC vertices (Normalized Device Coordinates) are vertices after perspective divide.
+        They map onto a normalized screen. They do not keep their original shape so
+        interpolating textures or shading will look wrong."""
+        self.screen_space_triangles: NDArray[np.float64] = None # type: ignore
+        """The actual triangles stored as 3 points relative to screen space."""
+        self.faces_kept: NDArray[np.bool] = None # type: ignore
+        """Faces currently in use in the pipeline (indices). As we progress, less faces
+        will be used due to clipping, culling, etc. This can be used to grab the
+        `faces` of a face/triangle array."""
+        self.inverse_w: NDArray[np.float64] = None # type: ignore
+        """Vertex inverse w data."""
+        self.world_space_triangles: NDArray[np.float64] = None # type: ignore
+        """TODO"""
+        self.face_normals: NDArray[np.float64] = None # type: ignore
+        """FACE normal (not to be confused with vertex_normals). Contains vertices
+        which represent where the triangle/face is pointing. Generally used for
+        back-face culling, flat shading, and geometric tests."""
+        self.vertex_normals: NDArray[np.float64] = None # type: ignore
+        """VERTEX normal (not to be confused with face_normals). Contains vertices
+        which represent averaged normals from surrounding vertices. Generally used
+        for smooth shading."""
+        self.uv_coords: NDArray[np.float64] = np.array([], dtype=np.float64)
+        """The uv coordinates for textures [0,1]. Used to sample textures, pixel per
+        pixel, at the fragment shader stage."""
+        self.vertex_faces: NDArray[np.int32] = None # type: ignore
+        """An array of faces which consist of 3 indicies. These are in reference
+        to the original verticies and thus must be the same size as the array
+        they are pulling from."""
+        self.uv_faces: NDArray[np.int32] = None # type: ignore
+        """An array of faces which consist of 3 indicies. These are in reference
+        to the original verticies and thus must be the same size as the array
+        they are pulling from."""
+        self.normal_faces: NDArray[np.int32] = None # type: ignore
+        """An array of faces which consist of 3 indicies. These are in reference
+        to the original verticies and thus must be the same size as the array
+        they are pulling from."""
         
         # variables that can be None
         self.texture: Texture|None = None
-        self.uv_coords: NDArray[np.float64] = np.array([], dtype=np.float64)
-        
+        """Contains the texture class with the data used for sampling textures."""
+
         # More temporary data
         self.colors: NDArray[np.float64]
-
-    @property
-    def homogeneous_vertices(self) -> NDArray[np.float64]:
-        if self._homogeneous_vertices is None:
-            raise RuntimeError("homogeneous_vertices accessed before being set")
-        return self._homogeneous_vertices
-    @homogeneous_vertices.setter
-    def homogeneous_vertices(self, value: NDArray[np.float64]) -> None:
-        self._homogeneous_vertices = value
-    
-    @property
-    def model_matrix(self) -> NDArray[np.float64]:
-        if self._model_matrix is None:
-            raise RuntimeError("model_matrix accessed before being set")
-        return self._model_matrix
-    @model_matrix.setter
-    def model_matrix(self, value: NDArray[np.float64]) -> None:
-        self._model_matrix = value
-    
-    @property
-    def clip_space_vertices(self) -> NDArray[np.float64]:
-        if self._clip_space_vertices is None:
-            raise RuntimeError("clip_space_vertices accessed before being set")
-        return self._clip_space_vertices 
-    @clip_space_vertices.setter
-    def clip_space_vertices(self, value: NDArray[np.float64]) -> None:
-        self._clip_space_vertices = value
-
-    @property
-    def faces_kept(self) -> NDArray[np.bool]:
-        if self._faces_kept is None:
-            raise RuntimeError("faces_kept accessed before being set")
-        return self._faces_kept 
-    @faces_kept.setter
-    def faces_kept(self, value: NDArray[np.bool]) -> None:
-        self._faces_kept = value
-    
-    @property
-    def ndc_vertices(self) -> NDArray[np.float64]:
-        if self._ndc_vertices is None:
-            raise RuntimeError("ndc_vertices accessed before being set")
-        return self._ndc_vertices
-    @ndc_vertices.setter
-    def ndc_vertices(self, value: NDArray[np.float64]) -> None:
-        self._ndc_vertices = value
-    
-    @property
-    def inverse_w(self) -> NDArray[np.float64]:
-        if self._inverse_w is None:
-            raise RuntimeError("inverse_w accessed before being set")
-        return self._inverse_w 
-    @inverse_w.setter
-    def inverse_w(self, value: NDArray[np.float64]) -> None:
-        self._inverse_w = value
-    
-    @property
-    def world_vertices(self) -> NDArray[np.float64]:
-        if self._world_vertices is None:
-            raise RuntimeError("world_vertices accessed before being set")
-        return self._world_vertices 
-    @world_vertices.setter
-    def world_vertices(self, value: NDArray[np.float64]) -> None:
-        self._world_vertices = value
-    
-    @property
-    def world_space_triangles(self) -> NDArray[np.float64]:
-        if self._world_space_triangles is None:
-            raise RuntimeError("world_space_triangles accessed before being set")
-        return self._world_space_triangles 
-    @world_space_triangles.setter
-    def world_space_triangles(self, value: NDArray[np.float64]) -> None:
-        self._world_space_triangles = value
-    
-    @property
-    def normals(self) -> NDArray[np.float64]:
-        if self._normals is None:
-            raise RuntimeError("normals accessed before being set")
-        return self._normals 
-    @normals.setter
-    def normals(self, value: NDArray[np.float64]) -> None:
-        self._normals = value
-    
-    @property
-    def faces(self) -> NDArray[np.int32]:
-        if self._faces is None:
-            raise RuntimeError("faces accessed before being set")
-        return self._faces 
-    @faces.setter
-    def faces(self, value: NDArray[np.int32]) -> None:
-        self._faces = value
-    
-    @property
-    def uv_faces(self) -> NDArray[np.int32]:
-        if self._uv_faces is None:
-            raise RuntimeError("uv_faces accessed before being set")
-        return self._uv_faces 
-    @uv_faces.setter
-    def uv_faces(self, value: NDArray[np.int32]) -> None:
-        self._uv_faces = value
-
-    @property
-    def screen_space_triangles(self) -> NDArray[np.float64]:
-        if self._screen_space_triangles is None:
-            raise RuntimeError("screen_space_triangles accessed before being set")
-        return self._screen_space_triangles
-    @screen_space_triangles.setter
-    def screen_space_triangles(self, value: NDArray[np.float64]) -> None:
-        self._screen_space_triangles = value
-
-    # @property
-    # def texture(self) -> Texture:
-    #     if self._texture is None:
-    #         raise RuntimeError("texture accessed before being set")
-    #     return self._texture
-    # @texture.setter
-    # def texture(self, value: Texture) -> None:
-    #     self._texture = value
-
-    @property
-    def normal_faces(self) -> NDArray[np.int32]:
-        if self._normal_faces is None:
-            raise RuntimeError("normal_faces accessed before being set")
-        return self._normal_faces
-    @normal_faces.setter
-    def normal_faces(self, value: NDArray[np.int32]) -> None:
-        self._normal_faces = value
+        """Temporary storage for colors assigned to each vertex (primarily for flat shading)."""

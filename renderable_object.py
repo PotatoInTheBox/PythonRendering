@@ -6,6 +6,15 @@ from numpy.typing import NDArray
 from texture import Texture
 
 class RenderableObject:
+    """
+    A renderable object is an object that contains data such as verticies, triangles, normals, textures, etc.
+    It is a object representation of what we read from an object file. Thus, the data shouldn't really be modified.
+    Instead, consider writing modified data to a buffer or seperate object.
+    
+    Modifications are allowed though for ease of access, such as the transform variable.
+    This is because it pertains to the object. But be aware that reusing this instance will have the effects
+    apply to all other duplicates of this object as well.
+    """
     def __init__(self, vertices: np.ndarray, faces: np.ndarray, normalize=True, name="UnnamedObject", uv_faces=[], texcoords=[], normals=[], normal_faces=[], texture_obj=None):
         self.vertices: NDArray[np.float64]  # (N, 3) float64
         self.vertices = np.array(vertices, dtype=np.float64)

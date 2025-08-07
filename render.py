@@ -39,6 +39,7 @@ from typing import Any, List, Optional, Tuple
 from numpy.typing import NDArray
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
+    # USING_WINDOWS = False
     USING_WINDOWS = True
     ctypes.windll.user32.SetProcessDPIAware()
 else:
@@ -566,11 +567,11 @@ class Renderer:
         global hover_triangle_index
         hover_triangle_index = -1
         # ========= DRAWING =========
-        for i, face in enumerate(obj_frame_data.faces):
+        for i, face in enumerate(obj_frame_data.vertex_faces):
             tri_screen = obj_frame_data.screen_space_triangles[i]
             if draw_lines:
                 self.draw_triangle_with_z(tri_screen[0][0:3], tri_screen[1][0:3], tri_screen[2][0:3], COLOR_GREEN)
-        for i, face in enumerate(obj_frame_data.faces):
+        for i, face in enumerate(obj_frame_data.vertex_faces):
             Profiler.profile_accumulate_start("draw_faces: project")
 
             # apply light to this face
@@ -648,11 +649,11 @@ class Renderer:
             obj_frame_data.inverse_w = inv_w
             obj_frame_data.world_vertices = v.compute_world_vertices(obj_frame_data.homogeneous_vertices, obj_frame_data.model_matrix)
             obj_frame_data.world_space_triangles = v.compute_world_triangles(obj_frame_data.world_vertices, r_object.faces)
-            obj_frame_data.normals = v.compute_normals(obj_frame_data.world_space_triangles)
-            obj_frame_data.colors = v.compute_lighting(obj_frame_data.normals, light)
+            obj_frame_data.face_normals = v.compute_normals(obj_frame_data.world_space_triangles)
+            obj_frame_data.colors = v.compute_lighting(obj_frame_data.face_normals, light)
 
             obj_frame_data.colors = obj_frame_data.colors[obj_frame_data.faces_kept]  # keep only faces kept
-            obj_frame_data.faces = r_object.faces[obj_frame_data.faces_kept]   # keep only faces kept
+            obj_frame_data.vertex_faces = r_object.faces[obj_frame_data.faces_kept]   # keep only faces kept
             obj_frame_data.normal_faces = r_object.normal_faces[obj_frame_data.faces_kept]  # keep only faces kept
             if r_object.uv_faces.shape[0] == obj_frame_data.faces_kept.shape[0] and r_object.uv_coords.size > 0:
                 obj_frame_data.uv_faces = r_object.uv_faces[obj_frame_data.faces_kept]  # keep only faces kept
@@ -661,7 +662,7 @@ class Renderer:
                 # I can safely filter them with the same mask.
                 # Otherwise, I have no clue, so I’ll just give an empty placeholder.
                 obj_frame_data.uv_faces = np.empty((0, 3), dtype=np.int32) # type: ignore
-            obj_frame_data.screen_space_triangles = v.ndc_to_screen(obj_frame_data.ndc_vertices, obj_frame_data.faces, self.grid_size_x, self.grid_size_y)
+            obj_frame_data.screen_space_triangles = v.ndc_to_screen(obj_frame_data.ndc_vertices, obj_frame_data.vertex_faces, self.grid_size_x, self.grid_size_y)
             Profiler.profile_accumulate_end("draw_polygons: pre_compute")
             self.draw_faces(obj_frame_data)
 
