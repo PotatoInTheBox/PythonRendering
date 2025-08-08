@@ -639,7 +639,8 @@ class Renderer:
             obj_frame_data = ObjectFrameData(r_object)
             obj_frame_data.texture = r_object.texture
             obj_frame_data.uv_coords = r_object.uv_coords
-            obj_frame_data.homogeneous_vertices = v.prepare_vertices(r_object)
+            obj_frame_data.vertex_normals = r_object.normals
+            obj_frame_data.homogeneous_vertices = v.to_homogeneous_vertices(r_object)
             if DO_WAVE_SHADER:
                 obj_frame_data.homogeneous_vertices = v.apply_vertex_wave_shader(
                     obj_frame_data.homogeneous_vertices, 

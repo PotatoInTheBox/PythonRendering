@@ -85,7 +85,7 @@ def compute_view_matrix():
     return view_matrix
 
 @Profiler.timed()
-def prepare_vertices(obj: RenderableObject) -> np.ndarray:
+def to_homogeneous_vertices(obj: RenderableObject) -> np.ndarray:
     """
     Converts object vertices into homogeneous coordinates.
 

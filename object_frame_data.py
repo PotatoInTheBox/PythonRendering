@@ -54,13 +54,13 @@ class ObjectFrameData:
         self.world_space_triangles: NDArray[np.float64] = None # type: ignore
         """TODO"""
         self.face_normals: NDArray[np.float64] = None # type: ignore
-        """FACE normal (not to be confused with vertex_normals). Contains vertices
-        which represent where the triangle/face is pointing. Generally used for
-        back-face culling, flat shading, and geometric tests."""
+        """**FACE** normal (not to be confused with vertex_normals). Contains vertices
+        which represent where the triangle/face is **POINTING**. Generally used for
+        **back-face culling**, **flat shading**, and geometric tests."""
         self.vertex_normals: NDArray[np.float64] = None # type: ignore
-        """VERTEX normal (not to be confused with face_normals). Contains vertices
-        which represent averaged normals from surrounding vertices. Generally used
-        for smooth shading."""
+        """**VERTEX** normal (not to be confused with face_normals). Contains vertices
+        which represent averaged normals from **SURROUNDING** vertices. Generally used
+        for **smooth shading**."""
         self.uv_coords: NDArray[np.float64] = np.array([], dtype=np.float64)
         """The uv coordinates for textures [0,1]. Used to sample textures, pixel per
         pixel, at the fragment shader stage."""
