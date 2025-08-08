@@ -129,29 +129,22 @@ def get_model_matrix(obj: RenderableObject, angle: float) -> np.ndarray:
 @Profiler.timed()
 def project_vertices(V_model: np.ndarray, model_matrix: np.ndarray, view_matrix: np.ndarray, projection_matrix: np.ndarray):
     """
-    Projects vertices from model space into clip space.
-
-    Parameters:
-        V_model (np.ndarray):
-            Homogeneous model-space vertices (N, 4).
-        model_matrix (np.ndarray):
-            Model transformation matrix (4x4).
-        view_matrix (np.ndarray):
-            View transformation matrix (4x4).
-        projection_matrix (np.ndarray):
-            Projection matrix (4x4).
+    Projects vertices from model space into world, view, and clip space.
 
     Returns:
-        np.ndarray:
-            Vertices in clip space (N, 4).
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: (V_world, V_view, V_clip)
     """
-    # Combine all transforms into a single 4x4 matrix
-    M = projection_matrix @ view_matrix @ model_matrix
+    # Model → World
+    V_world = (model_matrix @ V_model.T).T
 
-    # ========= MODEL → CLIP SPACE =========
-    V_clip: np.ndarray = (M @ V_model.T).T  # Shape: (N, 4)
+    # World → View
+    V_view = (view_matrix @ V_world.T).T
 
-    return V_clip
+    # View → Clip
+    V_clip = (projection_matrix @ V_view.T).T
+
+    return V_world, V_view, V_clip
+
 
 @Profiler.timed()
 def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
@@ -285,6 +278,7 @@ def compute_normals(tri_world: np.ndarray) -> np.ndarray:
             Unit normals for each face (F, 3).
     """
     # Precompute all normals of all faces
+    tri_world = tri_world[...,:3]  # Convert to 3D
     a = tri_world[:,1] - tri_world[:,0]  # (N, 3)
     b = tri_world[:,2] - tri_world[:,0]  # (N, 3)
     normals = np.cross(a, b)

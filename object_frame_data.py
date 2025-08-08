@@ -24,8 +24,15 @@ class ObjectFrameData:
         self.homogeneous_vertices: NDArray[np.float64] = None # type: ignore
         """Convert our vertices to a `4d` shape. This allows it to have a `w` component
         which helps calculate the perspective divide."""
-        self.world_vertices: NDArray[np.float64] = None # type: ignore
-        """Marked for removal"""
+        self.world_space_vertices: NDArray[np.float64] = None # type: ignore
+        """Vertices in world position. Similar to OpenGL with up being positive and down
+        being negative. Right being positive and left being negative. Z follows the right-hand rule
+        so Z is towards the camera and negative Z is away from the camera.
+        Most calculations can be done in view space but world_space_vertices is very cheap to calculate
+        so it's fine keeping it for now."""
+        self.view_space_vertices: NDArray[np.float64] = None # type: ignore
+        """View space vertices are like world space vertices but rotated and transformed relative
+        to the camera. Positive Z at this point still points towards the camera."""
         self.clip_space_vertices: NDArray[np.float64] = None # type: ignore
         """Clip space has our vertices after the perspective transform. But without
         perspective divide. We cannot yet use it for drawing to the screen (perspective
@@ -75,5 +82,5 @@ class ObjectFrameData:
         """Contains the texture class with the data used for sampling textures."""
 
         # More temporary data
-        self.colors: NDArray[np.float64]
+        self.face_shade: NDArray[np.float64]
         """Temporary storage for colors assigned to each vertex (primarily for flat shading)."""

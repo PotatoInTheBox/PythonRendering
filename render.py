@@ -418,29 +418,21 @@ class Renderer:
         tex_y = np.clip((v * texture_obj.height).astype(np.int32), 0, texture_obj.height - 1)
         sampled = (texture_obj.image[tex_y, tex_x] * 255.0).astype(np.uint8)
 
-        if tri_n is not None:
-            # ----- Perspective-correct normal interpolation -----
-            n1, n2, n3 = tri_n
-            n1_w = n1 * inv_w1
-            n2_w = n2 * inv_w2
-            n3_w = n3 * inv_w3
-            n_w = (w0_n[..., None] * n1_w +
-                w1_n[..., None] * n2_w +
-                w2_n[..., None] * n3_w)
-            n = n_w / inv_w[..., None]
-            n_norm = n / np.linalg.norm(n, axis=-1, keepdims=True)
-
-            # ----- Lighting (basic diffuse) -----
-            light_dir = np.array([0, 1, 0])  # Example: directional light from camera
-            intensity = np.clip(np.sum(n_norm * light_dir, axis=-1, keepdims=True), 0, 1)
-            sampled = (sampled * intensity).astype(np.uint8)
-
         sub_rgb[update_mask] = sampled[update_mask]
+    
+    def _shade_flat(self, sub_rgb, update_mask, luminance, overwrite=False):
+        """
+        Flat shading.
+        """
+        if overwrite:
+            sub_rgb[update_mask] = np.array(luminance * np.array((255,255,255), dtype=np.float64), dtype=np.uint8)
+        else:
+            sub_rgb[update_mask] = np.array(sub_rgb[update_mask].astype(np.float64) * luminance, dtype=np.uint8)
 
     # TODO I'm completely misunderstanding shading.
-    def _shade_flat(self, sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n=None):
+    def _shade_blend(self, sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n=None, overwrite=False):
         """
-        Flat shading. Supports optional per-vertex normals for lighting.
+        
         """
         if tri_n is not None:
             light_dir = np.array([0, 1, 0], dtype=np.float64)
@@ -482,15 +474,17 @@ class Renderer:
             if color[0] != 255 or color[1] != 0 or color[2] != 0:
                 color = (255,255,255)
             
-            temp = l_p[..., None]
-            
-            temp2 = np.array(color, dtype=np.float64)[:, None]
-            
             pixel_colors = l_p[..., None] * np.array(color, dtype=np.float64)
 
             # Apply lighting to base color
-            shaded_color = (pixel_colors).astype(np.uint8)
-            sub_rgb[update_mask] = shaded_color[update_mask]
+            # if overwrite:
+            #     shaded_color = (pixel_colors).astype(np.uint8)
+            #     sub_rgb[update_mask] = shaded_color[update_mask]
+            # else:
+            vals = sub_rgb[update_mask].astype(np.float64) * l_p[update_mask, None]
+            vals = np.clip(vals, 0, 255).astype(np.uint8)
+            sub_rgb[update_mask] = vals
+
         else:
             # No normals → solid fill
             sub_rgb[update_mask] = color
@@ -533,12 +527,24 @@ class Renderer:
         update_mask = mask & (z < sub_zbuffer)
         sub_zbuffer[update_mask] = z[update_mask]
         
-        # Pixel shading path
+        # Try to texture the tri with a texture object and uv data.
+        # Draw onto the sub buffer
         if texture_obj and uv_triplet:
             # self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
             self._shade_textured(sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj)
+            overwrite = False
         else:
-            self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
+            overwrite = True
+        
+        # Try to shade the triangle.
+        # If vertex normals exist then shade smoothly
+        # If not then use the "face_shade" value from -1 to 1
+        # to shade (normalized to [0,1])
+        # By default both shading functions will multiply by a luminocity value
+        # if a texture doesn't exist then a "overwrite" variable will be set to True
+        # to indicate setting the value instead of multiplying it (else we have an invis tri).
+        # self._shade_blend(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n, overwrite)
+        self._shade_flat(sub_rgb, update_mask, color, overwrite)
 
     @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
@@ -575,7 +581,7 @@ class Renderer:
             Profiler.profile_accumulate_start("draw_faces: project")
 
             # apply light to this face
-            color = obj_frame_data.colors[i]
+            color = obj_frame_data.face_shade[i]
 
             tri_screen = obj_frame_data.screen_space_triangles[i]
             tri_inv_w = obj_frame_data.inverse_w[face]
@@ -642,17 +648,26 @@ class Renderer:
                     render_config.wave_speed.val,
                     frame_count, angle)
             obj_frame_data.model_matrix = v.get_model_matrix(r_object, angle)
-            obj_frame_data.clip_space_vertices = v.project_vertices(obj_frame_data.homogeneous_vertices, obj_frame_data.model_matrix, view_matrix, self.projection_matrix)
-            obj_frame_data.faces_kept = v.cull_faces(obj_frame_data.clip_space_vertices, r_object.faces)
+            obj_frame_data.world_space_vertices, obj_frame_data.view_space_vertices, obj_frame_data.clip_space_vertices = (
+                v.project_vertices(
+                    obj_frame_data.homogeneous_vertices, 
+                    obj_frame_data.model_matrix,
+                    view_matrix, 
+                    self.projection_matrix))
             V_ndc, inv_w = v.perspective_divide(obj_frame_data.clip_space_vertices)
             obj_frame_data.ndc_vertices = V_ndc
             obj_frame_data.inverse_w = inv_w
-            obj_frame_data.world_vertices = v.compute_world_vertices(obj_frame_data.homogeneous_vertices, obj_frame_data.model_matrix)
-            obj_frame_data.world_space_triangles = v.compute_world_triangles(obj_frame_data.world_vertices, r_object.faces)
+            obj_frame_data.world_space_triangles = v.compute_world_triangles(obj_frame_data.world_space_vertices, r_object.faces)
             obj_frame_data.face_normals = v.compute_normals(obj_frame_data.world_space_triangles)
-            obj_frame_data.colors = v.compute_lighting(obj_frame_data.face_normals, light)
-
-            obj_frame_data.colors = obj_frame_data.colors[obj_frame_data.faces_kept]  # keep only faces kept
+            obj_frame_data.face_shade = v.compute_lighting(obj_frame_data.face_normals, light)
+            # TODO at some point around here we want to split triangles on the edge of the screen and make new ones.
+            # This is because it's possible having a triangle be outside the screen yet partially inside as well.
+            # The primary reason for doing this is any vertex with a negative z value must be culled no matter what.
+            # This leads to triangles popping in and out if too close. If not culled these triangles misbehave and fill the
+            # entire screen, causing extreme performance hits and extreme screen flicker.
+            obj_frame_data.faces_kept = v.cull_faces(obj_frame_data.clip_space_vertices, r_object.faces)
+            # filter out the faces we do not want to draw, keep only the ones we want to draw.
+            obj_frame_data.face_shade = obj_frame_data.face_shade[obj_frame_data.faces_kept]  # keep only faces kept
             obj_frame_data.vertex_faces = r_object.faces[obj_frame_data.faces_kept]   # keep only faces kept
             obj_frame_data.normal_faces = r_object.normal_faces[obj_frame_data.faces_kept]  # keep only faces kept
             if r_object.uv_faces.shape[0] == obj_frame_data.faces_kept.shape[0] and r_object.uv_coords.size > 0:
