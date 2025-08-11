@@ -23,6 +23,11 @@ def draw_array(image: np.ndarray):
     elif image.ndim == 3 and image.shape[2] == 3:
         img_norm = norm(image)
         im_display = ax.imshow(img_norm)
+    elif image.ndim == 3 and image.shape[2] == 4:
+        # Treat as RGBA, normalize RGB channels, keep alpha as is
+        rgb_norm = norm(image[..., :3])
+        rgba = np.dstack([rgb_norm, image[..., 3]])
+        im_display = ax.imshow(rgba)
     else:
         raise ValueError("Unsupported shape")
 

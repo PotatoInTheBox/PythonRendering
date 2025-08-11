@@ -6,6 +6,7 @@ from config import global_config
 from renderable_object import RenderableObject
 
 import numpy as np
+from numpy.typing import NDArray
 
 render_config = global_config
 
@@ -127,7 +128,7 @@ def get_model_matrix(obj: RenderableObject, angle: float) -> np.ndarray:
     return model_matrix
 
 @Profiler.timed()
-def project_vertices(V_model: np.ndarray, model_matrix: np.ndarray, view_matrix: np.ndarray, projection_matrix: np.ndarray):
+def project_vertices(V_model: np.ndarray, model_matrix: np.ndarray, view_matrix: np.ndarray, projection_matrix: np.ndarray) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
     """
     Projects vertices from model space into world, view, and clip space.
 
@@ -135,13 +136,13 @@ def project_vertices(V_model: np.ndarray, model_matrix: np.ndarray, view_matrix:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: (V_world, V_view, V_clip)
     """
     # Model → World
-    V_world = (model_matrix @ V_model.T).T
+    V_world: NDArray[np.float64] = (model_matrix @ V_model.T).T # type: ignore
 
     # World → View
-    V_view = (view_matrix @ V_world.T).T
+    V_view: NDArray[np.float64] = (view_matrix @ V_world.T).T # type: ignore
 
     # View → Clip
-    V_clip = (projection_matrix @ V_view.T).T
+    V_clip: NDArray[np.float64] = (projection_matrix @ V_view.T).T # type: ignore
 
     return V_world, V_view, V_clip
 

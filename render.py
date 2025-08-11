@@ -27,6 +27,9 @@ from config import ConfigEntry
 from config import global_config
 import vertex_helpers as v
 import debug as debug
+from shaders import VertexInput
+from shaders import VertexOutput
+from shaders import FragmentInput
 
 
 import pygame
@@ -37,6 +40,7 @@ from skimage.draw import line
 import numpy as np
 from typing import Any, List, Optional, Tuple
 from numpy.typing import NDArray
+from dataclasses import dataclass
 # Make windows not scale this window (pixels do have to be perfect)
 if sys.platform == "win32":
     # USING_WINDOWS = False
@@ -90,10 +94,10 @@ debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_
 debug_win.create_debug_label("Camera Position", render_config.camera_position)
 debug_win.create_debug_label("Camera Rotation", render_config.camera_rotation)
 
-# RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ]  # all the objects we want rendered
+RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ]  # all the objects we want rendered
 # RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
 # RENDER_OBJECTS = [NAME_OBJ]
-RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
+# RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
 # RENDER_OBJECTS = [FLOOR_OBJ, MONKEY_OBJ]
 
 # ========== Performance metrics ==========
@@ -130,6 +134,21 @@ draw_lines = False
 frame_count = 0  # count frames rendered so far
 
 hover_triangle_index = -1
+    
+    
+
+# Fragment output is simply either the sub-buffer we write to (np.array). Or possibly
+# an array in the future. In the future I may want to do it differently.
+# Such as possibly outputing as an array or having an opacity value somehow.
+
+@dataclass(slots=True)
+class FragmentBuffer():
+    sub_rgb_buffer: NDArray[np.uint8]       # (H, W, 3) RGB values
+    sub_zbuffer: NDArray[np.float32]        # (H, W) depth values
+    update_mask: NDArray[np.bool_]          # (H, W) coverage mask
+    position_map: NDArray[np.float32]       # (H, W, 3) interpolated positions
+    normals_map: NDArray[np.float32]|None   # (H, W, 3) interpolated normals
+    uv_map: NDArray[np.float32]|None        # (H, W, 2) interpolated UVs
 
 def normalize(v):
     return v / (np.linalg.norm(v) + 1e-16)
@@ -387,6 +406,7 @@ class Renderer:
         ys = np.arange(min_y, max_y + 1)
         return min_x, max_x, min_y, max_y, *np.meshgrid(xs, ys)
 
+    @Profiler.timed()
     def _compute_barycentrics(self, X, Y, p1, p2, p3):
         area = self._edge_fn(p1, p2, p3)
         inv_area = 1 / area
@@ -498,8 +518,59 @@ class Renderer:
         C = p1[0]*p2[1] - p1[1]*p2[0]
         return A, B, C
 
+    # TODO should merge fill_triangle with draw_triangle and reorganize
+    # the responsibilities.
+    # Current responbilities:
+    # fill_triangle:
+    # Compute triangle area, bounding box, barycentric coords, z buffer, fragment shader
+    # draw_triangle:
+    # Create triangles from coords (draw coord, normals, uv)
+    # TODO accept the following:
+    # screen_tri, uv_tri, normal_tri, texture_obj, render_obj, world_tri?, face_normal?
+    # Should accept as just triangles, make it easy to work with
+    # Do not think about indices at this point.
+    # They should be numpy arrays if possible
+    # I somehow have to have VertexOut passed. I have to do it in a simple way.
+    
+    # ChatGPT pipeline:
+    # Vertex Shader – transforms per-vertex data (positions, normals, UVs) from object space 
+    # → clip space (or equivalent space for projection).
+
+    # Primitive Assembly – groups vertices into triangles/lines/points based on the draw call.
+
+    # Clipping – removes primitives (or portions) outside the view volume.
+
+    # Perspective Divide – converts from clip coords → normalized device coords (NDC).
+
+    # Viewport Transform – maps NDC → screen coordinates.
+
+    # Back-face Culling – discards triangles facing away from the camera (optional, could also happen earlier).
+
+    # Rasterization – converts primitives into fragments via barycentric interpolation.
+
+    # Fragment Shader – runs per fragment, producing the final color/depth values.
+
+    # Output Merger – writes the final values to the framebuffer.
+    
+    # TODO
+    # So basically I can maybe have this pipeline (from vertex shader to fragment shader to drawing on screen):
+    # -> Vertex shader (transform vertices into coords that can map to the screen)
+    # -> Cull mask (use back-face culling and clip space to remove triangles
+    # that are out of bounds)
+    # -> Primitive assembly (assemble vertices, normals, uv coords into triangles)
+    # -> Perspective divide (kinda on it's own right now but is critical)
+    # -> Rasterize (apply barycentric interpolation to create a "fragment" which the shader can work with)
+    # -> Fragment shader (expects a collection of values (in screen space) perspective corrected
+    # to determine the final color of a pixel on screen)
+    # -> Output (use the output of the fragments to write to rgb_buffer)
+    # -> 
+    # -> 
+    # -> 
+    # -> 
+    # -> 
+    
     @Profiler.timed()
-    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, tri_n=None, texture_obj: Texture|None=None):
+    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, tri_n=None, texture_obj: Texture|None=None, render_object: RenderableObject|None = None):
         # p1, p2, p3 = (p1[0], p1[1], p1[2]), (p2[0], p2[1], p2[2]), (p3[0], p3[1], p3[2])
         # NOTE: TODO: WARNING: Watch out for negative numbers. Often you may have to flip values.
         # eg. Barycentric coordinates are inside triangle if all are negative, this also means all teh values have a negative sign.
@@ -526,6 +597,9 @@ class Renderer:
         sub_rgb = self.rgb_buffer[min_y:max_y+1, min_x:max_x+1]
         update_mask = mask & (z < sub_zbuffer)
         sub_zbuffer[update_mask] = z[update_mask]
+
+        render_object_2: RenderableObject = render_object # type: ignore
+        # frag_in: FragmentInput = FragmentInput(world_position=None, face_normal=None)
         
         # Try to texture the tri with a texture object and uv data.
         # Draw onto the sub buffer
@@ -533,8 +607,26 @@ class Renderer:
             # self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
             self._shade_textured(sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj)
             overwrite = False
+            (u1, v1), (u2, v2), (u3, v3) = uv_triplet
+            inv_w1, inv_w2, inv_w3 = tri_inv_w
+            u_w = w0_n * u1 * inv_w1 + w1_n * u2 * inv_w2 + w2_n * u3 * inv_w3
+            v_w = w0_n * v1 * inv_w1 + w1_n * v2 * inv_w2 + w2_n * v3 * inv_w3
+            denom = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
+            # frag_in.uv = np.array([u_w, v_w]) / denom
         else:
             overwrite = True
+        
+        if tri_n:
+            # (x_n1, y_n1), (x_n2, y_n2), (x_n3, y_n3) = tri_n
+            # inv_w1, inv_w2, inv_w3 = tri_inv_w
+            # x_n_w = w0_n * x_n1 * inv_w1 + w1_n * x_n2 * inv_w2 + w2_n * x_n3 * inv_w3
+            # y_n_w = w0_n * y_n1 * inv_w1 + w1_n * y_n2 * inv_w2 + w2_n * y_n3 * inv_w3
+            # denom = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
+            # frag_in.normal = np.array([x_n_w, y_n_w]) / denom
+            pass
+        
+        # frag_in.texture = texture_obj
+        # render_object_2.fragment_shader(frag_in)
         
         # Try to shade the triangle.
         # If vertex normals exist then shade smoothly
@@ -586,7 +678,11 @@ class Renderer:
             tri_screen = obj_frame_data.screen_space_triangles[i]
             tri_inv_w = obj_frame_data.inverse_w[face]
             if obj_frame_data.uv_faces.size > 0:
-                tri_uv = (obj_frame_data.uv_coords[obj_frame_data.uv_faces[i][0]], obj_frame_data.uv_coords[obj_frame_data.uv_faces[i][1]], obj_frame_data.uv_coords[obj_frame_data.uv_faces[i][2]])
+                uv_i1, uv_i2, uv_i3 = obj_frame_data.uv_faces[i][0], obj_frame_data.uv_faces[i][1], obj_frame_data.uv_faces[i][2]
+                if -1 not in (uv_i1, uv_i2, uv_i3):
+                    tri_uv = (obj_frame_data.uv_coords[uv_i1], obj_frame_data.uv_coords[uv_i2], obj_frame_data.uv_coords[uv_i3])
+                else:
+                    tri_uv = None
             else:
                 tri_uv = None
             
@@ -635,30 +731,27 @@ class Renderer:
         view_matrix = v.compute_view_matrix()
 
         for r_object in self.objects:
-            Profiler.profile_accumulate_start("draw_polygons: pre_compute")
+            Profiler.profile_accumulate_start("draw_polygons: prepare")
             obj_frame_data = ObjectFrameData(r_object)
             obj_frame_data.texture = r_object.texture
             obj_frame_data.uv_coords = r_object.uv_coords
             obj_frame_data.vertex_normals = r_object.normals
             obj_frame_data.homogeneous_vertices = v.to_homogeneous_vertices(r_object)
-            if DO_WAVE_SHADER:
-                obj_frame_data.homogeneous_vertices = v.apply_vertex_wave_shader(
-                    obj_frame_data.homogeneous_vertices, 
-                    render_config.wave_amplitude.val, 
-                    render_config.wave_period.val, 
-                    render_config.wave_speed.val,
-                    frame_count, angle)
             obj_frame_data.model_matrix = v.get_model_matrix(r_object, angle)
-            obj_frame_data.world_space_vertices, obj_frame_data.view_space_vertices, obj_frame_data.clip_space_vertices = (
-                v.project_vertices(
-                    obj_frame_data.homogeneous_vertices, 
-                    obj_frame_data.model_matrix,
-                    view_matrix, 
-                    self.projection_matrix))
-            V_ndc, inv_w = v.perspective_divide(obj_frame_data.clip_space_vertices)
-            obj_frame_data.ndc_vertices = V_ndc
-            obj_frame_data.inverse_w = inv_w
-            obj_frame_data.world_space_triangles = v.compute_world_triangles(obj_frame_data.world_space_vertices, r_object.faces)
+            m = obj_frame_data.model_matrix
+            mv = view_matrix @ obj_frame_data.model_matrix
+            mvp = self.projection_matrix @ view_matrix @ obj_frame_data.model_matrix
+            Profiler.profile_accumulate_end("draw_polygons: prepare")
+            
+            Profiler.profile_accumulate_start("draw_polygons: vertex shader")
+            vertex_in = VertexInput(m, mv, mvp, obj_frame_data.homogeneous_vertices)
+            vertex_in.normal = r_object.normals
+            vertex_in.uv = r_object.uv_coords
+            vertex_out: VertexOutput = r_object.vertex_shader(vertex_in)
+            Profiler.profile_accumulate_end("draw_polygons: vertex shader")
+    
+            Profiler.profile_accumulate_start("draw_polygons: cull")
+            obj_frame_data.world_space_triangles = v.compute_world_triangles(vertex_out.world_position, r_object.faces)
             obj_frame_data.face_normals = v.compute_normals(obj_frame_data.world_space_triangles)
             obj_frame_data.face_shade = v.compute_lighting(obj_frame_data.face_normals, light)
             # TODO at some point around here we want to split triangles on the edge of the screen and make new ones.
@@ -666,24 +759,166 @@ class Renderer:
             # The primary reason for doing this is any vertex with a negative z value must be culled no matter what.
             # This leads to triangles popping in and out if too close. If not culled these triangles misbehave and fill the
             # entire screen, causing extreme performance hits and extreme screen flicker.
-            obj_frame_data.faces_kept = v.cull_faces(obj_frame_data.clip_space_vertices, r_object.faces)
+            # TODO (we may want to keep ids of the triangles. This can be done by adding an extra array called
+            # "ids" and cull that too, in essence keeping ids)
+            obj_frame_data.faces_kept = v.cull_faces(vertex_out.clip_position, r_object.faces)
+            Profiler.profile_accumulate_end("draw_polygons: cull")
+            
             # filter out the faces we do not want to draw, keep only the ones we want to draw.
-            obj_frame_data.face_shade = obj_frame_data.face_shade[obj_frame_data.faces_kept]  # keep only faces kept
-            obj_frame_data.vertex_faces = r_object.faces[obj_frame_data.faces_kept]   # keep only faces kept
-            obj_frame_data.normal_faces = r_object.normal_faces[obj_frame_data.faces_kept]  # keep only faces kept
-            if r_object.uv_faces.shape[0] == obj_frame_data.faces_kept.shape[0] and r_object.uv_coords.size > 0:
-                obj_frame_data.uv_faces = r_object.uv_faces[obj_frame_data.faces_kept]  # keep only faces kept
-            else:
-                # If the UV face array length matches the original face array length, 
-                # I can safely filter them with the same mask.
-                # Otherwise, I have no clue, so I’ll just give an empty placeholder.
-                obj_frame_data.uv_faces = np.empty((0, 3), dtype=np.int32) # type: ignore
+            Profiler.profile_accumulate_start("draw_polygons: assemble")
+            self.assemble(obj_frame_data, r_object)
+            Profiler.profile_accumulate_end("draw_polygons: assemble")
+            
+            V_ndc, inv_w = v.perspective_divide(vertex_out.clip_position)
+            obj_frame_data.ndc_vertices = V_ndc
+            obj_frame_data.inverse_w = inv_w
+            
+            # TODO ndc_to_screen is doing too much. It should not be creating
+            # triangles.
             obj_frame_data.screen_space_triangles = v.ndc_to_screen(obj_frame_data.ndc_vertices, obj_frame_data.vertex_faces, self.grid_size_x, self.grid_size_y)
-            Profiler.profile_accumulate_end("draw_polygons: pre_compute")
-            self.draw_faces(obj_frame_data)
+            
+            # At this point we MUST go through the triangles individually
+            # Loop through the triangles we are left with. No triangle means
+            # no draw. (normal and uv optional)
+            # TODO access screen space from something like `obj_frame_data.screen_space_vertices`
+            for i, _ in enumerate(obj_frame_data.vertex_faces):
+                triangle_screen_vertices = obj_frame_data.screen_space_triangles[i]
+                triangle_normals = self.get_normal_triangle(obj_frame_data.vertex_normals, obj_frame_data.normal_faces, i)
+                triangle_uvs = self.get_normal_triangle(obj_frame_data.uv_coords, obj_frame_data.uv_faces, i)
+                triangle_ws = self.get_normal_triangle(obj_frame_data.inverse_w, obj_frame_data.vertex_faces, i)
+                frag_buffer = self.rasterize(triangle_screen_vertices, triangle_normals, triangle_uvs, triangle_ws)
+                
+                if do_draw_faces and frag_buffer is not None:
+                    # self.fill_triangle_2(frag_buffer, r_object, obj_frame_data.texture)
+                    Profiler.profile_accumulate_start("draw_polygons: fragment shader")
+                    f_in = FragmentInput(frag_buffer.position_map, obj_frame_data.face_normals, frag_buffer.normals_map, frag_buffer.uv_map, obj_frame_data.texture)
+                    f_out: np.ndarray = r_object.fragment_shader(f_in)
+                    Profiler.profile_accumulate_end("draw_polygons: fragment shader")
+                    # ignore alpha channel for now
+                    temp = f_out[..., :3]
+                    frag_buffer.sub_rgb_buffer[frag_buffer.update_mask] = (f_out[..., :3][frag_buffer.update_mask] * 255).astype(np.uint8)
+                
+                # if do_draw_faces or draw_z_buffer:
+                #     color = np.ndarray((255,255,255))
+                #     self.fill_triangle(triangle_screen_vertices[0], triangle_screen_vertices[1], triangle_screen_vertices[2], tri_inv_w, color, triangle_uvs, triangle_normals, obj_frame_data.texture) # type: ignore
+            
+            
+            
+            # once rasterized we need to call our fragment shader to get
+            # a fragment. Afterwards we draw that fragment.
+            
+            # self.draw_faces(obj_frame_data)
+    
+    @Profiler.timed()
+    def bary_terpolate_2d(self, w0, w1, w2, triangle, triangle_ws):
+        (x1, y1), (x2, y2), (x3, y3) = triangle
+        inv_w1, inv_w2, inv_w3 = triangle_ws
+        u_w = w0 * x1 * inv_w1 + w1 * x2 * inv_w2 + w2 * x3 * inv_w3
+        v_w = w0 * y1 * inv_w1 + w1 * y2 * inv_w2 + w2 * y3 * inv_w3
+
+        # Shared perspective correction factor
+        inv_w = w0 * inv_w1 + w1 * inv_w2 + w2 * inv_w3
+
+        # Apply perspective correction
+        x = u_w / inv_w
+        y = v_w / inv_w
+
+        return np.stack((x, y), axis=-1)
+
+    @Profiler.timed()
+    def bary_terpolate_3d(self, w0, w1, w2, triangle, triangle_ws):
+        (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = triangle
+        inv_w1, inv_w2, inv_w3 = triangle_ws
+        
+        u_w = w0 * x1 * inv_w1 + w1 * x2 * inv_w2 + w2 * x3 * inv_w3
+        v_w = w0 * y1 * inv_w1 + w1 * y2 * inv_w2 + w2 * y3 * inv_w3
+        w_w = w0 * z1 * inv_w1 + w1 * z2 * inv_w2 + w2 * z3 * inv_w3
+
+        inv_w = w0 * inv_w1 + w1 * inv_w2 + w2 * inv_w3
+
+        x = u_w / inv_w
+        y = v_w / inv_w
+        z = w_w / inv_w
+
+        return np.stack((x, y, z), axis=-1)
+    
+    @Profiler.timed()
+    def rasterize(self, triangle_screen_vertices, triangle_normals, triangle_uvs, triangle_ws):
+        
+        p1, p2, p3 = triangle_screen_vertices
+        area = self._edge_fn(p1, p2, p3)
+        if area == 0: return None  # skip degenerate triangle
+
+        # Bounding box and pixel grid
+        min_x, max_x, min_y, max_y, X, Y = self._compute_pixel_grid(p1, p2, p3)
+        if min_x > max_x or min_y > max_y: return None # Triangle is completely outside screen bounds
+
+        # Barycentric weights
+        w0, w1, w2, inv_area, mask = self._compute_barycentrics(X, Y, p1, p2, p3)
+        w0_n, w1_n, w2_n = w0 * inv_area, w1 * inv_area, w2 * inv_area
+        
+        Profiler.profile_accumulate_start("rasterize: buffer setup")
+        # Z-depth buffer
+        z = w0_n * p1[2] + w1_n * p2[2] + w2_n * p3[2]
+        sub_zbuffer = self.z_buffer[min_y:max_y+1, min_x:max_x+1]
+        sub_rgb = self.rgb_buffer[min_y:max_y+1, min_x:max_x+1]
+        update_mask = mask & (z < sub_zbuffer)
+        sub_zbuffer[update_mask] = z[update_mask]
+        Profiler.profile_accumulate_end("rasterize: buffer setup")
+        
+        Profiler.profile_accumulate_start("rasterize: interpolate")
+        pos_map = self.bary_terpolate_3d(w0_n, w1_n, w2_n, triangle_screen_vertices, triangle_ws)
+        if triangle_normals is not None:
+            # TODO can be optimized by just not calling it. Make absolutely sure that
+            # flat shaded objects have `triangle_normals` set to none so we can skip
+            # this expensive interpolation.
+            normals_map = self.bary_terpolate_3d(w0_n, w1_n, w2_n, triangle_normals, triangle_ws)
+        else: normals_map = None
+        if triangle_uvs is not None:
+            uv_map = self.bary_terpolate_2d(w0_n, w1_n, w2_n, triangle_uvs, triangle_ws)
+        else: uv_map = None
+        Profiler.profile_accumulate_end("rasterize: interpolate")
+        
+        Profiler.profile_accumulate_start("rasterize: build fragment buffer")
+        fragment_buffer = FragmentBuffer(sub_rgb, sub_zbuffer, update_mask, pos_map, normals_map, uv_map)
+        Profiler.profile_accumulate_end("rasterize: build fragment buffer")
+        return fragment_buffer
+    
+    def get_normal_triangle(self, vertex_normals: NDArray[np.float64], normal_faces: NDArray[np.int32], index: int) -> Optional[NDArray[np.float64]]:
+        if index < 0 or index >= len(normal_faces):
+            return None
+        tri_idx = normal_faces[index]
+        if np.any(tri_idx < 0):
+            return None
+        try:
+            return vertex_normals[tri_idx]
+        except IndexError:
+            return None
+    
+    def get_uv_triangle(self, uv_coords: NDArray[np.float64], uv_faces: NDArray[np.int32], index: int) -> Optional[NDArray[np.float64]]:
+        if index < 0 or index >= len(uv_faces):
+            return None
+        tri_idx = uv_faces[index]
+        if np.any(tri_idx < 0):
+            return None
+        try:
+            return uv_coords[tri_idx]
+        except IndexError:
+            return None
+
+    def assemble(self, obj_frame_data: ObjectFrameData, object: RenderableObject):
+        # We assemble the vertices by updating the following:
+        # obj_frame_data.vertex_faces
+        # obj_frame_data.normal_faces (if exists)
+        # obj_frame_data.uv_faces (if exists)
+        # obj_frame_data.face_shade (temporary)
+        obj_frame_data.face_shade = obj_frame_data.face_shade[obj_frame_data.faces_kept]
+        obj_frame_data.vertex_faces = object.faces[obj_frame_data.faces_kept]
+        obj_frame_data.normal_faces = object.normal_faces[obj_frame_data.faces_kept]
+        obj_frame_data.uv_faces = object.uv_faces[obj_frame_data.faces_kept]
+        pass
 
     @Profiler.timed("render_buffer")
-
     def render_buffer(self):
         global draw_z_buffer  # Toggle this to enable/disable Z buffer debug view
         # DEBUG_Z_MIN = -100  # how close we can see

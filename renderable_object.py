@@ -4,6 +4,8 @@ import numpy as np
 from transform import Transform
 from numpy.typing import NDArray
 from texture import Texture
+from shaders import default_vertex_shader
+from shaders import default_fragment_shader
 
 class RenderableObject:
     """
@@ -45,6 +47,9 @@ class RenderableObject:
         if normalize:
             # At startup we conver the verticies to values between -1 and 1.
             self.normalize()
+        
+        self.vertex_shader = default_vertex_shader
+        self.fragment_shader = default_fragment_shader
 
     def normalize(self):
         v = np.array(self.vertices)  # Shape: (N, 3)
@@ -136,7 +141,7 @@ class RenderableObject:
                     all_uv_faces.extend(uv_faces)
                     all_normal_faces.extend(normal_faces)
             
-            for face_idx, normal_idx in zip(triangles, all_normal_faces):
+            for idx, (face_idx, normal_idx) in enumerate(zip(triangles, all_normal_faces)):
                 if -1 in normal_idx:
                     v0, v1, v2 = (np.array(vertices[i]) for i in face_idx)
                     n = np.cross(v1 - v0, v2 - v0)
@@ -145,9 +150,11 @@ class RenderableObject:
                         n /= norm_len
                     normals.append(tuple(n))
                     new_n_idx = len(normals) - 1
-                    old_idx = normal_idx
-                    normal_idx = tuple(new_n_idx if i == -1 else i for i in normal_idx)
-                    all_normal_faces[all_normal_faces.index(old_idx)] = normal_idx
+                    # NOTE updated normals will all have the same index.
+                    # This is because they will all be facing the same direction.
+                    # This has the effect of doing flat shading.
+                    updated_normal_idx = tuple(new_n_idx if i == -1 else i for i in normal_idx)
+                    all_normal_faces[idx] = updated_normal_idx
 
                             
             for index_tri in all_normal_faces:
