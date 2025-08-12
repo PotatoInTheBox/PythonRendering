@@ -60,7 +60,6 @@ class Profiler:
             def inner(*args, **kwargs):
                 if enabled_profiler:
                     label = name or fn.__name__
-                    label = "f:" + label
                     start = time.perf_counter()
                     result = fn(*args, **kwargs)
                     elapsed = time.perf_counter() - start

@@ -827,35 +827,55 @@ class Renderer:
 
     @Profiler.timed()
     def bary_terpolate_3d(self, w0, w1, w2, triangle, triangle_ws):
+        Profiler.profile_accumulate_start("bary_terpolate_3d: unpack")
         (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = triangle
         inv_w1, inv_w2, inv_w3 = triangle_ws
+        Profiler.profile_accumulate_end("bary_terpolate_3d: unpack")
         
+        Profiler.profile_accumulate_start("bary_terpolate_3d: create grid")
         u_w = w0 * x1 * inv_w1 + w1 * x2 * inv_w2 + w2 * x3 * inv_w3
         v_w = w0 * y1 * inv_w1 + w1 * y2 * inv_w2 + w2 * y3 * inv_w3
         w_w = w0 * z1 * inv_w1 + w1 * z2 * inv_w2 + w2 * z3 * inv_w3
+        Profiler.profile_accumulate_end("bary_terpolate_3d: create grid")
+        
+        Profiler.profile_accumulate_start("bary_terpolate_3d: do nothing")
+        Profiler.profile_accumulate_end("bary_terpolate_3d: do nothing")
 
+        Profiler.profile_accumulate_start("bary_terpolate_3d: create inverse grid")
         inv_w = w0 * inv_w1 + w1 * inv_w2 + w2 * inv_w3
+        Profiler.profile_accumulate_start("bary_terpolate_3d: create inverse grid")
 
+        Profiler.profile_accumulate_start("bary_terpolate_3d: inverse xyz")
         x = u_w / inv_w
         y = v_w / inv_w
         z = w_w / inv_w
+        Profiler.profile_accumulate_end("bary_terpolate_3d: inverse xyz")
+        
+        Profiler.profile_accumulate_start("bary_terpolate_3d: create numpy stack")
+        result = np.stack((x, y, z), axis=-1)
+        Profiler.profile_accumulate_end("bary_terpolate_3d: create numpy stack")
 
-        return np.stack((x, y, z), axis=-1)
+        return result
     
     @Profiler.timed()
     def rasterize(self, triangle_screen_vertices, triangle_normals, triangle_uvs, triangle_ws):
-        
+        Profiler.profile_accumulate_start("rasterize: barycentric setup")
         p1, p2, p3 = triangle_screen_vertices
         area = self._edge_fn(p1, p2, p3)
-        if area == 0: return None  # skip degenerate triangle
+        if area == 0: 
+            Profiler.profile_accumulate_end("rasterize: barycentric setup")
+            return None  # skip degenerate triangle
 
         # Bounding box and pixel grid
         min_x, max_x, min_y, max_y, X, Y = self._compute_pixel_grid(p1, p2, p3)
-        if min_x > max_x or min_y > max_y: return None # Triangle is completely outside screen bounds
+        if min_x > max_x or min_y > max_y: 
+            Profiler.profile_accumulate_end("rasterize: barycentric setup")
+            return None # Triangle is completely outside screen bounds
 
         # Barycentric weights
         w0, w1, w2, inv_area, mask = self._compute_barycentrics(X, Y, p1, p2, p3)
         w0_n, w1_n, w2_n = w0 * inv_area, w1 * inv_area, w2 * inv_area
+        Profiler.profile_accumulate_end("rasterize: barycentric setup")
         
         Profiler.profile_accumulate_start("rasterize: buffer setup")
         # Z-depth buffer
