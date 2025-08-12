@@ -833,18 +833,21 @@ class Renderer:
         inv_w1, inv_w2, inv_w3 = triangle_ws
         Profiler.profile_accumulate_end("bary_terpolate_3d: unpack")
         
-        Profiler.profile_accumulate_start("bary_terpolate_3d: create grid")
+        # Profiler.profile_accumulate_start("bary_terpolate_3d: create grid")
         # u_w = w0 * x1 * inv_w1 + w1 * x2 * inv_w2 + w2 * x3 * inv_w3
         # v_w = w0 * y1 * inv_w1 + w1 * y2 * inv_w2 + w2 * y3 * inv_w3
         # w_w = w0 * z1 * inv_w1 + w1 * z2 * inv_w2 + w2 * z3 * inv_w3
+        # Profiler.profile_accumulate_end("bary_terpolate_3d: create grid")
+        Profiler.profile_accumulate_start("bary_terpolate_3d: precompute weights")
         w0i1 = w0 * inv_w1
         w1i2 = w1 * inv_w2
         w2i3 = w2 * inv_w3
+        Profiler.profile_accumulate_end("bary_terpolate_3d: precompute weights")
 
+        Profiler.profile_accumulate_start("bary_terpolate_3d: create grid")
         u_w = w0i1*x1 + w1i2*x2 + w2i3*x3
         v_w = w0i1*y1 + w1i2*y2 + w2i3*y3
         w_w = w0i1*z1 + w1i2*z2 + w2i3*z3
-        
         Profiler.profile_accumulate_end("bary_terpolate_3d: create grid")
         
         Profiler.profile_accumulate_start("bary_terpolate_3d: do nothing")
