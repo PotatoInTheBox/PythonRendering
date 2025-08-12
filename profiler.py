@@ -42,14 +42,7 @@ class Profiler:
                     continue
                 total_ms = total * 1000
                 avg_ms = (total / (count / intervals)) * 1000
-                percent = (total / grand_total) * 100 if grand_total > 0 else 0
-                if percent >= 100:
-                    percent_str = "100%"
-                elif percent >= 10:
-                    percent_str = f"{percent:4.1f}%"
-                else:
-                    percent_str = f"{percent:4.2f}%"
-                print(f"{percent_str} — {name}: {total_ms/intervals:.3f}ms total over {count/intervals} calls (avg {avg_ms/intervals:.3f}ms)")
+                print(f"{total_ms/intervals:8.2f}ms — {name}: {total_ms/intervals:.3f}ms total over {count/intervals} calls (avg {avg_ms/intervals:.3f}ms)")
 
             _profile_accumulators.clear()
             print("\\\\\\\\\\\\\\\\==== Report End   ====////////")
