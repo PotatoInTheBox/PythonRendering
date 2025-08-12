@@ -853,14 +853,18 @@ class Renderer:
         inv_w = w0i1 + w1i2 + w2i3
         Profiler.profile_accumulate_start("bary_terpolate_3d: create inverse grid")
 
-        Profiler.profile_accumulate_start("bary_terpolate_3d: inverse xyz")
-        x = u_w / inv_w
-        y = v_w / inv_w
-        z = w_w / inv_w
-        Profiler.profile_accumulate_end("bary_terpolate_3d: inverse xyz")
+        # Profiler.profile_accumulate_start("bary_terpolate_3d: inverse xyz")
+        # x = u_w / inv_w
+        # y = v_w / inv_w
+        # z = w_w / inv_w
+        # Profiler.profile_accumulate_end("bary_terpolate_3d: inverse xyz")
         
         Profiler.profile_accumulate_start("bary_terpolate_3d: create numpy stack")
-        result = np.stack((x, y, z), axis=-1)
+        # result = np.stack((x, y, z), axis=-1)
+        result = np.empty(w0.shape + (3,), dtype=np.float32)
+        result[...,0] = u_w / inv_w
+        result[...,1] = v_w / inv_w
+        result[...,2] = w_w / inv_w
         Profiler.profile_accumulate_end("bary_terpolate_3d: create numpy stack")
 
         return result
