@@ -824,6 +824,8 @@ class Renderer:
 
         return np.stack((x, y), axis=-1)
 
+    # NOTE: as of commit e6b7c06 on my PC it takes ~3ms to process the profiler
+    # out of the 23.5ms it took over 1540 calls.
     @Profiler.timed()
     def bary_terpolate_3d(self, w0, w1, w2, triangle, triangle_ws):
         Profiler.profile_accumulate_start("bary_terpolate_3d: unpack")
