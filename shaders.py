@@ -31,6 +31,10 @@ class VertexInput:
     - Do not expect any value to be normalized."""
     worldMatrix: np.ndarray  # (4,4)
     """Object to World matrix for converting vertices into world space."""
+    viewMatrix: np.ndarray  # (4,4)
+    """World to View matrix for converting vertices into view space."""
+    projectionMatrix: np.ndarray  # (4,4)
+    """View to Projection matrix for converting vertices into clip space."""
     worldViewMatrix: np.ndarray  # (4,4)
     """Object to View matrix for converting vertices into view space.
     View space is where we have the world but rotated and moved relative
@@ -150,4 +154,47 @@ def default_fragment_shader(f: FragmentInput) -> np.ndarray:
     alpha = np.ones(result.shape[:2] + (1,), dtype=result.dtype)  # shape (H, W, 1)
     rgba = np.concatenate((result, alpha), axis=-1)  # shape (H, W, 4)
     return rgba
-    
+
+@Profiler.timed()
+def skybox_vertex_shader(v: VertexInput) -> VertexOutput:
+    """
+    Skybox vertex shader:
+    - Ignores camera translation.
+    - Uses the model matrix for scaling/positioning.
+    - Passes direction or UVs for texturing.
+    """
+    # Copy view matrix and zero translation
+    rot_only = v.viewMatrix.copy()
+    rot_only[:3, 3] = 0.0
+
+    # Apply model matrix first (scales cube by 9000)
+    world_pos = (v.worldMatrix @ v.position.T).T
+
+    # Apply rotation-only view
+    world_dir = (rot_only @ world_pos.T).T
+
+    # Clip space
+    clip = (v.projectionMatrix @ world_dir.T).T
+
+    out = VertexOutput(world_position=world_dir, clip_position=clip)
+    out.uv = v.uv
+    return out
+
+@Profiler.timed()
+def skybox_fragment_shader(f: FragmentInput, brightness: float = 1.0) -> np.ndarray:
+    """
+    Fragment shader for rendering a skybox.
+    - Ignores normals and lighting, just samples texture color.
+    - Applies uniform brightness multiplier.
+    """
+    if f.texture is not None and f.uv is not None:
+        uv = f.uv.copy()
+        uv[...,1] = 1.0 - uv[...,1]
+        sampled = sample(f.texture, uv)
+        result = sampled * brightness
+        # result = sample(f.texture, f.uv) * brightness
+    else:
+        result = np.array((0.0, 0.0, 0.0), dtype=np.float32)  # fallback black
+
+    alpha = np.ones(result.shape[:2] + (1,), dtype=result.dtype)
+    return np.concatenate((result, alpha), axis=-1)

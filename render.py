@@ -27,7 +27,7 @@ from config import ConfigEntry
 from config import global_config
 import vertex_helpers as v
 import debug as debug
-from shaders import VertexInput, skybox_fragment_shader
+from shaders import VertexInput, skybox_fragment_shader, skybox_vertex_shader
 from shaders import VertexOutput
 from shaders import FragmentInput
 
@@ -69,6 +69,7 @@ DRAGON_OBJ = RenderableObject.load_new_obj("./models/dragon.obj")
 FLOOR_OBJ = RenderableObject.load_new_obj("./models/floor.obj", texture_filepath="./textures/uvGrid.bytes")
 DAVE_OBJ = RenderableObject.load_new_obj("./models/dave.obj", texture_filepath="./textures/daveTex.bytes")
 SKYBOX_OBJ = RenderableObject.load_new_obj("./models/skybox.obj", texture_filepath="./textures/skyboxTex.bytes")
+SKYBOX_OBJ.vertex_shader = skybox_vertex_shader
 SKYBOX_OBJ.fragment_shader = skybox_fragment_shader
 
 
@@ -753,7 +754,7 @@ class Renderer:
             Profiler.profile_accumulate_end("draw_polygons: prepare")
             
             Profiler.profile_accumulate_start("draw_polygons: vertex shader")
-            vertex_in = VertexInput(m, mv, mvp, obj_frame_data.homogeneous_vertices)
+            vertex_in = VertexInput(m, view_matrix, self.projection_matrix, mv, mvp, obj_frame_data.homogeneous_vertices)
             vertex_in.normal = r_object.normals
             vertex_in.uv = r_object.uv_coords
             vertex_out: VertexOutput = r_object.vertex_shader(vertex_in)
