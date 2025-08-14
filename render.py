@@ -52,6 +52,8 @@ else:
 render_config = global_config
 debug_win = DebugWindow()
 
+# area_debug = []
+
 # ========== Camera settings ==========
 debug_win.create_slider_input_float("CAMERA_SPEED", render_config.camera_speed, min_val=0.001, max_val=1)
 debug_win.create_slider_input_float("CAMERA_SENSITIVITY", render_config.camera_sensitivity, min_val=0.01, max_val=20)
@@ -98,6 +100,7 @@ RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTIN
 # RENDER_OBJECTS = [NAME_OBJ]
 # RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
 # RENDER_OBJECTS = [FLOOR_OBJ, MONKEY_OBJ]
+# RENDER_OBJECTS = [FOX_SITTING_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -823,49 +826,78 @@ class Renderer:
         y = v_w / inv_w
 
         return np.stack((x, y), axis=-1)
+    
+    @Profiler.timed()
+    def bary_terpolate_3d_small(self, w0, w1, w2, triangle, triangle_ws):
+        """
+        Barycentric interpolation optimized for small grids (H*W <= ~6).
+        Returns result of shape (H, W, 3).
+        """
+        H, W = w0.shape
+
+        # Unpack triangle and weights
+        (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = triangle
+        inv_w0, inv_w1, inv_w2 = triangle_ws
+
+        # Pre-multiply weights
+        w0_inv = w0 * inv_w0
+        w1_inv = w1 * inv_w1
+        w2_inv = w2 * inv_w2
+
+        # Preallocate output
+        result = np.empty((H, W, 3), dtype=np.float32)
+
+        # Flat loop over small grid
+        for i in range(H):
+            for j in range(W):
+                wi0 = w0_inv[i,j]
+                wi1 = w1_inv[i,j]
+                wi2 = w2_inv[i,j]
+                inv_sum = wi0 + wi1 + wi2
+
+                result[i,j,0] = (wi0*x1 + wi1*x2 + wi2*x3) / inv_sum
+                result[i,j,1] = (wi0*y1 + wi1*y2 + wi2*y3) / inv_sum
+                result[i,j,2] = (wi0*z1 + wi1*z2 + wi2*z3) / inv_sum
+
+        return result
 
     # NOTE: as of commit e6b7c06 on my PC it takes ~3ms to process the profiler
     # out of the 23.5ms it took over 1540 calls.
     @Profiler.timed()
     def bary_terpolate_3d(self, w0, w1, w2, triangle, triangle_ws):
+        
+        H, W = w0.shape
+        # area_debug.append(H * W)
+        
+        if W * H <= 10:
+            return self.bary_terpolate_3d_small(w0, w1, w2, triangle, triangle_ws)
+        
         Profiler.profile_accumulate_start("bary_terpolate_3d: unpack")
         (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = triangle
-        inv_w1, inv_w2, inv_w3 = triangle_ws
+        inv_w0, inv_w1, inv_w2 = triangle_ws
         Profiler.profile_accumulate_end("bary_terpolate_3d: unpack")
-        
-        # Profiler.profile_accumulate_start("bary_terpolate_3d: create grid")
-        # u_w = w0 * x1 * inv_w1 + w1 * x2 * inv_w2 + w2 * x3 * inv_w3
-        # v_w = w0 * y1 * inv_w1 + w1 * y2 * inv_w2 + w2 * y3 * inv_w3
-        # w_w = w0 * z1 * inv_w1 + w1 * z2 * inv_w2 + w2 * z3 * inv_w3
-        # Profiler.profile_accumulate_end("bary_terpolate_3d: create grid")
-        Profiler.profile_accumulate_start("bary_terpolate_3d: precompute weights")
-        w0i1 = w0 * inv_w1
-        w1i2 = w1 * inv_w2
-        w2i3 = w2 * inv_w3
-        Profiler.profile_accumulate_end("bary_terpolate_3d: precompute weights")
+
+        Profiler.profile_accumulate_start("bary_terpolate_3d: invert weights")
+        w0_inv = w0 * inv_w0
+        w1_inv = w1 * inv_w1
+        w2_inv = w2 * inv_w2
+        Profiler.profile_accumulate_end("bary_terpolate_3d: invert weights")
 
         Profiler.profile_accumulate_start("bary_terpolate_3d: create grid")
-        u_w = w0i1*x1 + w1i2*x2 + w2i3*x3
-        v_w = w0i1*y1 + w1i2*y2 + w2i3*y3
-        w_w = w0i1*z1 + w1i2*z2 + w2i3*z3
+        u_w = w0_inv*x1 + w1_inv*x2 + w2_inv*x3
+        v_w = w0_inv*y1 + w1_inv*y2 + w2_inv*y3
+        w_w = w0_inv*z1 + w1_inv*z2 + w2_inv*z3
         Profiler.profile_accumulate_end("bary_terpolate_3d: create grid")
         
+        # Sanity check to make sure our performance isn't being lost by a profiler
         Profiler.profile_accumulate_start("bary_terpolate_3d: do nothing")
         Profiler.profile_accumulate_end("bary_terpolate_3d: do nothing")
 
         Profiler.profile_accumulate_start("bary_terpolate_3d: create inverse grid")
-        # inv_w = w0 * inv_w1 + w1 * inv_w2 + w2 * inv_w3
-        inv_w = w0i1 + w1i2 + w2i3
-        Profiler.profile_accumulate_start("bary_terpolate_3d: create inverse grid")
-
-        # Profiler.profile_accumulate_start("bary_terpolate_3d: inverse xyz")
-        # x = u_w / inv_w
-        # y = v_w / inv_w
-        # z = w_w / inv_w
-        # Profiler.profile_accumulate_end("bary_terpolate_3d: inverse xyz")
+        inv_w = w0_inv + w1_inv + w2_inv
+        Profiler.profile_accumulate_end("bary_terpolate_3d: create inverse grid")
         
         Profiler.profile_accumulate_start("bary_terpolate_3d: create numpy stack")
-        # result = np.stack((x, y, z), axis=-1)
         result = np.empty(w0.shape + (3,), dtype=np.float32)
         result[...,0] = u_w / inv_w
         result[...,1] = v_w / inv_w

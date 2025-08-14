@@ -45,3 +45,34 @@ def draw_array(image: np.ndarray):
 
     ax.format_coord = format_coord
     plt.show()
+
+def plot_area(title, x_label, y_label, data):
+    """
+    Plot a 1D array of data with matplotlib.
+    """
+    plt.figure(figsize=(8, 5))
+    plt.plot(data, marker='o')
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.grid(True)
+    plt.show()
+
+def plot_area_distribution(title, x_label, y_label, data):
+    """
+    Plot a histogram with 1:1 bins (each integer value gets its own bin).
+    """
+    if not data:
+        return
+
+    min_val = int(min(data))
+    max_val = int(max(data))
+    bins = range(min_val, max_val + 2)  # +2 to include last value
+
+    plt.figure(figsize=(8, 5))
+    plt.hist(data, bins=bins, edgecolor='black')
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
