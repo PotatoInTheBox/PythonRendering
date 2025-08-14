@@ -27,7 +27,7 @@ from config import ConfigEntry
 from config import global_config
 import vertex_helpers as v
 import debug as debug
-from shaders import VertexInput
+from shaders import VertexInput, skybox_fragment_shader
 from shaders import VertexOutput
 from shaders import FragmentInput
 
@@ -62,11 +62,14 @@ debug_win.create_slider_input_float("CAMERA_SENSITIVITY", render_config.camera_s
 MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
 NAME_OBJ = RenderableObject.load_new_obj("./models/name.obj")
 SHIP_OBJ = RenderableObject.load_new_obj("./models/ship.obj")
-FOX_OBJ = RenderableObject.load_new_obj("./models/fox.obj")
-FOX_SITTING_OBJ = RenderableObject.load_new_obj("./models/foxSitting.obj")
+FOX_OBJ = RenderableObject.load_new_obj("./models/fox.obj", texture_filepath="./textures/colMap.bytes")
+FOX_SITTING_OBJ = RenderableObject.load_new_obj("./models/foxSitting.obj", texture_filepath="./textures/colMap.bytes")
 CLOUD_OBJ = RenderableObject.load_new_obj("./models/cloud.obj")
 DRAGON_OBJ = RenderableObject.load_new_obj("./models/dragon.obj")
 FLOOR_OBJ = RenderableObject.load_new_obj("./models/floor.obj", texture_filepath="./textures/uvGrid.bytes")
+DAVE_OBJ = RenderableObject.load_new_obj("./models/dave.obj", texture_filepath="./textures/daveTex.bytes")
+SKYBOX_OBJ = RenderableObject.load_new_obj("./models/skybox.obj", texture_filepath="./textures/skyboxTex.bytes")
+SKYBOX_OBJ.fragment_shader = skybox_fragment_shader
 
 
 MONKEY_OBJ.transform.translate([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
@@ -82,6 +85,9 @@ FOX_SITTING_OBJ.transform.translate([0, 0.25, 2])
 DRAGON_OBJ.transform.translate([-1, -4, 5])
 DRAGON_OBJ.transform.rotate([0,np.pi,0])
 FLOOR_OBJ.transform.translate([0,-0.5,2])
+DAVE_OBJ.transform.translate([-1.0,2,0])
+SKYBOX_OBJ.transform.scale([900,900,900])
+# SKYBOX_OBJ.transform.rotate([0,0,0])
 
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
@@ -95,12 +101,13 @@ debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_
 debug_win.create_debug_label("Camera Position", render_config.camera_position)
 debug_win.create_debug_label("Camera Rotation", render_config.camera_rotation)
 
-RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ]  # all the objects we want rendered
+# RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ, DAVE_OBJ, SKYBOX_OBJ]  # all the objects we want rendered
 # RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
 # RENDER_OBJECTS = [NAME_OBJ]
 # RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
 # RENDER_OBJECTS = [FLOOR_OBJ, MONKEY_OBJ]
 # RENDER_OBJECTS = [FOX_SITTING_OBJ]
+RENDER_OBJECTS = [FOX_SITTING_OBJ, FLOOR_OBJ, SKYBOX_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
