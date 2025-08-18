@@ -164,12 +164,7 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
     """
     verts = V_clip[faces]  # (F, 3, 4)
 
-    # 1. ANY vertex behind camera (z <= 0) → drop
-    behind_camera = (verts[..., 3] <= 0).any(axis=1)
-
-    # 2. ALL vertices outside clip bounds → drop
-    abs_coords = np.abs(verts[..., :3])  # (F, 3, 3)
-    # outside_clip = (abs_coords > verts[..., [3]]).all(axis=(1, 2))
+    
     
     x, y, z, w = verts[..., 0], verts[..., 1], verts[..., 2], verts[..., 3]
 
@@ -191,11 +186,16 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
         outside_far.all(axis=1)
     )
     
-    CLIP_ANY_OUTSIDE = False
+    # 1. ANY vertex behind camera (z <= 0) → drop
+    behind_camera = outside_near.any(axis=1)
+
+    partially_behind_z = outside_near.any(axis=1) & ~outside_near.all(axis=1)
+    partially_behind_z_idx = np.nonzero(partially_behind_z)[0]
     
-    if CLIP_ANY_OUTSIDE:
-        # Drop faces if ANY vertex is outside clip bounds
-        outside_clip_any = (abs_coords > verts[..., [3]]).any(axis=(1, 2))
+    # TODO temp float
+    # near_clip = 0.01
+    # vertex_behind_z = (z < near_clip)   # (F, 3) boolean per vertex
+    # behind_z = vertex_behind_z.sum(axis=1)  # (F,) count per triangle
     
     # Compute normals in clip space
     a = verts[:, 1, :3] / verts[:, 1, [3]] - verts[:, 0, :3] / verts[:, 0, [3]]
@@ -206,8 +206,9 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
     backfacing = normals[:, 2] < 0  # Facing -Z means away from camera → drop
 
     # Faces to keep
-    faces_kept = ~(behind_camera | fully_outside | backfacing)
-    return faces_kept
+    # faces_kept = ~(behind_camera | fully_outside | backfacing)
+    faces_kept = ~(behind_camera | fully_outside)
+    return faces_kept, partially_behind_z_idx
 
 @Profiler.timed()
 def perspective_divide(V_clip: np.ndarray) -> Tuple[np.ndarray,np.ndarray]:
@@ -345,3 +346,23 @@ def ndc_to_screen(V_ndc: np.ndarray, faces: np.ndarray, grid_size_x: int, grid_s
     tri_screen = np.dstack((xy_screen, z[..., None]))  # shape (F, 3, 3)
     
     return tri_screen
+
+def lerp(from_v, to_v, t):
+    return from_v + (to_v - from_v) * t
+
+class VertexBuffer:
+    def __init__(self):
+        self.positions = []  # list of (4,)
+        self.normals   = []  # list of (3,)
+        self.uvs       = []  # list of (2,)
+        self.p_indices   = []  # list of (3,) face indices
+        self.n_indices   = []  # list of (3,) face indices
+        self.t_indices   = []  # list of (3,) face indices
+
+    def to_numpy(self):
+        return (
+            np.array(self.positions, dtype=np.float32),
+            np.array(self.normals, dtype=np.float32),
+            np.array(self.uvs, dtype=np.float32),
+            np.array(self.p_indices, dtype=np.int32),
+        )

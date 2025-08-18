@@ -139,9 +139,8 @@ def default_fragment_shader(f: FragmentInput) -> np.ndarray:
     else:
         diffusion_amount = np.clip((np.dot(f.face_normal, global_light) + 1.0) / 2.0, 0, 1)
         diffuse = diffusion_amount * light_color
-        height, width = f.world_position.shape[0], f.world_position.shape[1] if f.world_position.ndim == 3 else 1
-        N = f.world_position.shape[0]
-        diffuse = np.tile(diffuse, (N, 1))
+        H, W = f.world_position.shape[:2]
+        diffuse = np.tile(diffuse, (H, W, 1))
     
     object_color = np.array((0.85, 0.9, 1.0))  # slight blue
     
