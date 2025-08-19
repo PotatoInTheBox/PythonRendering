@@ -189,8 +189,7 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
     # 1. ANY vertex behind camera (z <= 0) → drop
     behind_camera = outside_near.any(axis=1)
 
-    partially_behind_z = outside_near.any(axis=1) & ~outside_near.all(axis=1)
-    partially_behind_z_idx = np.nonzero(partially_behind_z)[0]
+    
     
     # TODO temp float
     # near_clip = 0.01
@@ -208,6 +207,9 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
     # Faces to keep
     # faces_kept = ~(behind_camera | fully_outside | backfacing)
     faces_kept = ~(behind_camera | fully_outside)
+    
+    partially_behind_z = outside_near.any(axis=1) & ~outside_near.all(axis=1)
+    partially_behind_z_idx = np.nonzero(partially_behind_z)[0]
     return faces_kept, partially_behind_z_idx
 
 @Profiler.timed()
@@ -350,7 +352,7 @@ def ndc_to_screen(V_ndc: np.ndarray, faces: np.ndarray, grid_size_x: int, grid_s
 def lerp(from_v, to_v, t):
     return from_v + (to_v - from_v) * t
 
-class VertexBuffer:
+class VertexClipBuffer:
     def __init__(self):
         self.positions = []  # list of (4,)
         self.normals   = []  # list of (3,)
@@ -358,6 +360,7 @@ class VertexBuffer:
         self.p_indices   = []  # list of (3,) face indices
         self.n_indices   = []  # list of (3,) face indices
         self.t_indices   = []  # list of (3,) face indices
+        self.face_normals = []  # list of (3,)
 
     def to_numpy(self):
         return (

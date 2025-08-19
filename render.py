@@ -734,11 +734,262 @@ class Renderer:
         tri_new[clip_prev_idx] = new_vert_prev
         return tri_new
 
-    def append_new_triangle_to_v_buffer(self, original_vertices: np.ndarray, vertices: list[np.ndarray], indices: list[np.ndarray], tri: np.ndarray, non_clip_idx: int, clip_next_idx: int, clip_prev_idx: int):
+    def create_clipped_vert_tri_quad(self, verts: np.ndarray, face_indices: np.ndarray, frac_next: float, frac_prev: float, i: int, clip_idx: int, next_idx: int, prev_idx: int, shape=(3,4)):
+        tri_indices = face_indices[i]
+        tri = verts[tri_indices]
+
+        vert_prev = tri[prev_idx]
+        vert_next = tri[next_idx]
+        vert_clip = tri[clip_idx]
+
+        # Generate new vertices at the intersection points
+        new_vert_prev = v.lerp(vert_clip, vert_prev, frac_prev)
+        new_vert_next = v.lerp(vert_clip, vert_next, frac_next)
+
+        # First triangle: (prev_idx, prev_clip_idx, next_idx)
+        tri0 = np.zeros(shape, dtype=np.float64)
+        tri0[clip_idx] = vert_prev
+        tri0[next_idx] = new_vert_prev
+        tri0[prev_idx] = vert_next
+
+        # Second triangle: (prev_clip_idx, next_clip_idx, next_idx)
+        tri1 = np.zeros(shape, dtype=np.float64)
+        tri1[clip_idx] = new_vert_prev
+        tri1[next_idx] = new_vert_next
+        tri1[prev_idx] = vert_next
+
+        return (tri0, tri1)  # shape (2,3,4)
+
+    def append_new_triangle_to_v_buffer(self, original_vertices: np.ndarray, vertices: list[np.ndarray], indices: list[np.ndarray], tri: np.ndarray, idx_A: int, idx_B: int, idx_C: int):
         vertices.extend(tri)
         future_i = len(original_vertices) + len(indices)
-        new_tri_idx = np.array([future_i + clip_prev_idx, future_i + non_clip_idx, future_i + clip_next_idx], dtype=np.int64)
+        new_tri_idx = np.array([future_i + idx_C, future_i + idx_A, future_i + idx_B], dtype=np.int64)
         indices.append(new_tri_idx)
+    
+    # This one is a doozy. I need to do way too many things in one function.
+    # I need it to receive interpolated values and apply them to any given
+    # triangle, then it needs to form a new triangle (by interpolating the
+    # vertices).
+    def clip_append_new(self, original_vertices: np.ndarray, original_indices: np.ndarray, vertices: list, indices: list, clip_idx: int, prev_idx: int, next_idx: int, frac_prev, frac_next, i: int, do_quad=True):
+        tri_indices = original_indices[i]
+        tri = original_vertices[tri_indices]
+        
+        v_clipped = tri[clip_idx]
+        v_next = tri[next_idx]
+        v_prev = tri[prev_idx]
+        
+        # Basically, we need to make our new triangles, easy enough.
+        new_vert_prev = v.lerp(v_clipped, v_prev, frac_prev)
+        new_vert_next = v.lerp(v_clipped, v_next, frac_next)
+        
+        # Then we append them to the list of vertices
+        future_i = len(original_vertices) + len(indices)
+        tri_prev_clip_idx = future_i
+        tri_next_clip_idx = future_i + 1
+        vertices.append(new_vert_prev)
+        vertices.append(new_vert_next)
+        
+        # Now we need to construct two new triangles.
+        # We can reuse the position of the previous two for one of them.
+        # And reuse the position of one vertex for the other one.
+        
+        if do_quad:
+            new_tri_idx_1 = (tri_indices[prev_idx], np.int32(tri_prev_clip_idx), tri_indices[next_idx])
+            new_tri_idx_2 = (tri_prev_clip_idx, np.int32(tri_next_clip_idx), tri_indices[next_idx])
+            indices.append(new_tri_idx_1)
+            indices.append(new_tri_idx_2)
+        else:
+            new_tri_idx = (np.int32(tri_prev_clip_idx), tri_indices[clip_idx], np.int32(tri_next_clip_idx))
+            indices.append(new_tri_idx)
+
+
+    # Basically, the objective of this function is to grab our vertices and clip
+    # them against the near plane
+    # 
+    def clip_faces(self, obj_frame_data: ObjectFrameData, face_to_clip: np.ndarray):
+        # TODO make sure we are only calculating ones we kept with faces_kept
+        # faces that aren't facing us are not important.
+        # TODO accumilate our new triangles into our buffer.
+        # Basically, when we clip we will have new positions/normals/uvs so we need
+        # to append them to the `obj_frame_data` vertices. We will also then
+        # need to create a new triangle and add that to the `obj_frame_data` faces.
+        # This means our buffer will need indices that point into the original vertex
+        # buffer as well as a new one.
+        v_buffer = v.VertexClipBuffer()
+        for i in (face_to_clip):
+            # process_triangle(i, faces[i])
+            tri_indices = obj_frame_data.vertex_faces[i]
+            tri = obj_frame_data.clip_space_vertices[tri_indices]
+            
+            near_clip = 0.01
+            clip = (tri[:, 2] < near_clip)
+            clip_count = clip.sum()
+            if clip_count == 0:
+                # # Lucky us, the issue is resolved (likely a different triangle
+                # # already clipped for us). Let's accept this triangle now.
+                # obj_frame_data.faces_kept[i] = True
+
+                # TODO
+                # Not lucky us. If this happens then we likely lost information
+                raise Exception("You messed up. You modified a partially \
+                                behind triangle earlier and now we can't \
+                                properly rebuild this one!")
+                pass
+            elif clip_count == 1:
+                clip_idx = np.where(clip)[0][0]
+                index_next = (clip_idx + 1) % 3
+                index_prev = (clip_idx - 1 + 3) % 3
+                
+                v_clipped = tri[clip_idx]
+                v_next = tri[index_next]
+                v_prev = tri[index_prev]
+                
+                frac_next = (near_clip - v_clipped[2]) / (v_next[2] - v_clipped[2])
+                frac_prev = (near_clip - v_clipped[2]) / (v_prev[2] - v_clipped[2])
+                
+                self.clip_append_new(obj_frame_data.clip_space_vertices, obj_frame_data.vertex_faces, 
+                                          v_buffer.positions, v_buffer.p_indices, 
+                                          clip_idx, index_prev, index_next, 
+                                          frac_prev, frac_next, i)
+                
+                v_buffer.face_normals.append(obj_frame_data.face_normals[i])
+                
+                if obj_frame_data.world_normals is not None:
+                    self.clip_append_new(obj_frame_data.world_normals, obj_frame_data.normal_faces, 
+                                          v_buffer.normals, v_buffer.n_indices, 
+                                          clip_idx, index_prev, index_next, 
+                                          frac_prev, frac_next, i)
+                
+                # # build the new uv vertices (append)
+                if obj_frame_data.uv_coords is not None:
+                    self.clip_append_new(obj_frame_data.uv_coords, obj_frame_data.uv_faces, 
+                                          v_buffer.uvs, v_buffer.t_indices, 
+                                          clip_idx, index_prev, index_next, 
+                                          frac_prev, frac_next, i)
+                    
+                pass
+            elif clip_count == 2:  # shorten existing triangle
+                # pseudocode...
+                # figure out the vertex that will not be clipped
+                # figure out the vertex after this one
+                # figure out the vertex before this one
+                no_clip_idx = np.where(~clip)[0][0]
+                index_next = (no_clip_idx + 1) % 3
+                index_prev = (no_clip_idx - 1 + 3) % 3
+                
+                v_not_clipped = tri[no_clip_idx]
+                v_next = tri[index_next]
+                v_prev = tri[index_prev]
+                
+                frac_next = (near_clip - v_not_clipped[2]) / (v_next[2] - v_not_clipped[2])
+                frac_prev = (near_clip - v_not_clipped[2]) / (v_prev[2] - v_not_clipped[2])
+                
+                self.clip_append_new(obj_frame_data.clip_space_vertices, obj_frame_data.vertex_faces, 
+                                          v_buffer.positions, v_buffer.p_indices, 
+                                          no_clip_idx, index_prev, index_next, 
+                                          frac_prev, frac_next, i, do_quad=False)
+                
+                v_buffer.face_normals.append(obj_frame_data.face_normals[i])
+                
+                if obj_frame_data.world_normals is not None:
+                    self.clip_append_new(obj_frame_data.world_normals, obj_frame_data.normal_faces, 
+                                          v_buffer.normals, v_buffer.n_indices, 
+                                          no_clip_idx, index_prev, index_next, 
+                                          frac_prev, frac_next, i, do_quad=False)
+                
+                # # build the new uv vertices (append)
+                if obj_frame_data.uv_coords is not None:
+                    self.clip_append_new(obj_frame_data.uv_coords, obj_frame_data.uv_faces, 
+                                          v_buffer.uvs, v_buffer.t_indices, 
+                                          no_clip_idx, index_prev, index_next, 
+                                          frac_prev, frac_next, i, do_quad=False)
+                
+                # I need to give an index, an array of vertices, an array of faces,
+                # a non_clip index, clip_next index, clip_prev index, next_frac, and prev_frac
+                # It should return a tuple of 3 vertices which represent the triangle.
+                    
+
+                # new_v_next = v.lerp(v_not_clipped, v_next, frac_next)
+                # new_v_prev = v.lerp(v_not_clipped, v_prev, frac_prev)
+                
+                # build the new clip space vertices (append)
+                # Do the steps in reverse. This should hopefully assemble
+                # our modified triangle vertices with the points in the same
+                # place (clipped this time of course).
+                # tri_new = np.ndarray(shape=3, dtype=np.float64)
+                # tri_new[no_clip_idx] = v_not_clipped
+                # tri_new[index_next] = new_v_next
+                # tri_new[index_prev] = new_v_prev
+                # new_vert_tri = self.create_clipped_vert_tri(obj_frame_data.clip_space_vertices, obj_frame_data.vertex_faces, frac_next, frac_prev, i, no_clip_idx, index_next, index_prev, shape=(3,4))
+                # # new_vert_next = new_vert_tri[index_next]
+                # # new_vert_prev = new_vert_tri[index_prev]
+                # # I know this will contain duplicates. But I really don't feel
+                # # like dealing with sharing vertices at the moment.
+                # # v_buffer.positions.extend(new_vert_tri)
+                # # future_i = len(vertex_out.clip_position) + len(v_buffer.p_indices)
+                # # v_buffer.p_indices.append([future_i + index_prev, future_i + no_clip_idx, future_i + index_next])
+                # self.append_new_triangle_to_v_buffer(obj_frame_data.clip_space_vertices, v_buffer.positions, v_buffer.p_indices, new_vert_tri, no_clip_idx, index_next, index_prev)
+                # v_buffer.face_normals.append(obj_frame_data.face_normals[i])
+                
+                # # # We must make it visible again
+                # # obj_frame_data.faces_kept[i] = True
+                
+                
+                # # build the new normal vertices (append)
+                
+                # # n_not_clipped = tri[no_clip_idx]
+                # # n_next = tri[index_next]
+                # # n_prev = tri[index_prev]
+                # # new_n_next = v.lerp(v_not_clipped, v_next, frac_next)
+                # # new_n_prev = v.lerp(v_not_clipped, v_prev, frac_prev)
+                # # normal_tri_new = np.ndarray(shape=3, dtype=np.float64)
+                # if obj_frame_data.world_normals is not None:
+                #     # tri_normals_indices = r_object.normal_faces[i]
+                #     new_normal_tri = self.create_clipped_vert_tri(obj_frame_data.world_normals, obj_frame_data.normal_faces, frac_next, frac_prev, i, no_clip_idx, index_next, index_prev, shape=(3,3))
+                #     self.append_new_triangle_to_v_buffer(obj_frame_data.world_normals, v_buffer.normals, v_buffer.n_indices, new_normal_tri, no_clip_idx, index_next, index_prev)
+                
+                # # # build the new uv vertices (append)
+                # if obj_frame_data.uv_coords is not None:
+                #     # tri_uv_indices = r_object.uv_faces[i]
+                #     new_uv_tri = self.create_clipped_vert_tri(obj_frame_data.uv_coords, obj_frame_data.uv_faces, frac_next, frac_prev, i, no_clip_idx, index_next, index_prev, shape=(3,2))
+                #     self.append_new_triangle_to_v_buffer(obj_frame_data.uv_coords, v_buffer.uvs, v_buffer.t_indices, new_uv_tri, no_clip_idx, index_next, index_prev)
+                
+                # Actually, we can skip building any new triangles.
+                # If we replace at the exact same spot then we should be good
+                # build a new vertex triangle (replace current)
+                # build a new normal triangle (replace current)
+                # build a new uv triangle (replace current)
+                
+                pass
+            else:
+                # This means that a non-culled triangle got here.
+                # We need to make sure we have it culled earlier.
+                # raise Exception("How did we get here?")
+                pass
+            pass
+        # Now we need to build our new triangles
+        if len(v_buffer.positions) != 0:
+            obj_frame_data.clip_space_vertices = np.vstack([obj_frame_data.clip_space_vertices, np.array(v_buffer.positions, dtype=np.float64)])
+        if obj_frame_data.world_normals is not None and len(v_buffer.normals) != 0:
+            obj_frame_data.world_normals = np.vstack([obj_frame_data.world_normals, np.array(v_buffer.normals, dtype=np.float64)])
+        if obj_frame_data.uv_coords is not None and len(v_buffer.uvs) != 0:
+            obj_frame_data.uv_coords = np.vstack([obj_frame_data.uv_coords, np.array(v_buffer.uvs, dtype=np.float64)])
+        if obj_frame_data.face_normals is not None and len(v_buffer.face_normals) != 0:
+            obj_frame_data.face_normals = np.vstack([obj_frame_data.face_normals, np.array(v_buffer.face_normals, dtype=np.float64)])
+        pass
+    
+        # Add indices
+        if len(v_buffer.p_indices) != 0:
+            obj_frame_data.vertex_faces = np.vstack([obj_frame_data.vertex_faces, np.array(v_buffer.p_indices, dtype=np.int32)])
+        if len(v_buffer.n_indices) != 0:
+            obj_frame_data.normal_faces = np.vstack([obj_frame_data.normal_faces, np.array(v_buffer.n_indices, dtype=np.int32)])
+        if len(v_buffer.t_indices) != 0:
+            obj_frame_data.uv_faces = np.vstack([obj_frame_data.uv_faces, np.array(v_buffer.t_indices, dtype=np.int32)])
+        
+        # Extend faces_kept
+        obj_frame_data.faces_kept = np.concatenate([obj_frame_data.faces_kept, np.ones(len(v_buffer.p_indices), dtype=bool)])
+    
+        pass
 
     @Profiler.timed()
     def draw_polygons(self):
@@ -782,158 +1033,36 @@ class Renderer:
             Profiler.profile_accumulate_end("draw_polygons: prepare")
             
             Profiler.profile_accumulate_start("draw_polygons: vertex shader")
+            # Load shader values
             vertex_in = VertexInput(m, view_matrix, self.projection_matrix, mv, mvp, obj_frame_data.homogeneous_vertices)
             vertex_in.normal = obj_frame_data.vertex_normals
             vertex_in.uv = obj_frame_data.uv_coords
+            
+            # Run the shader
             vertex_out: VertexOutput = r_object.vertex_shader(vertex_in)
+            
+            # Extract shader values and place into buffer (via reference)
+            # NOTE we don't want to use vertex_out in the code later on.
+            # We simply use vertex_out to grab our data. Not to continue passing
+            # it around.
+            obj_frame_data.clip_space_vertices = vertex_out.clip_position
+            obj_frame_data.world_space_vertices = vertex_out.world_position
+            if vertex_out.face_normals is not None:
+                obj_frame_data.face_normals = vertex_out.face_normals
+            if vertex_out.world_normal is not None:
+                obj_frame_data.world_normals = vertex_out.world_normal
+            if vertex_out.uv is not None:
+                obj_frame_data.uv_coords = vertex_out.uv
             Profiler.profile_accumulate_end("draw_polygons: vertex shader")
 
             Profiler.profile_accumulate_start("draw_polygons: cull")
-            obj_frame_data.world_space_triangles = v.compute_world_triangles(vertex_out.world_position, r_object.faces)
+            obj_frame_data.world_space_triangles = v.compute_world_triangles(obj_frame_data.world_space_vertices, r_object.faces)
+            # TODO compute these in the vertex shader
             obj_frame_data.face_normals = v.compute_normals(obj_frame_data.world_space_triangles)
             # obj_frame_data.face_shade = v.compute_lighting(obj_frame_data.face_normals, light)
-            obj_frame_data.faces_kept, partially_behind_z_idx = v.cull_faces(vertex_out.clip_position, r_object.faces) # type: ignore
+            obj_frame_data.faces_kept, partially_behind_z_idx = v.cull_faces(obj_frame_data.clip_space_vertices, r_object.faces) # type: ignore
             
-            # TODO make sure we are only calculating ones we kept with faces_kept
-            # faces that aren't facing us are not important.
-            # TODO accumilate our new triangles into our buffer.
-            # Basically, when we clip we will have new positions/normals/uvs so we need
-            # to append them to the `obj_frame_data` vertices. We will also then
-            # need to create a new triangle and add that to the `obj_frame_data` faces.
-            # This means our buffer will need indices that point into the original vertex
-            # buffer as well as a new one.
-            v_buffer = v.VertexBuffer()
-            for i in partially_behind_z_idx:
-                # process_triangle(i, faces[i])
-                tri_indices = r_object.faces[i]
-                tri = vertex_out.clip_position[tri_indices]
-                
-                near_clip = 0.01
-                clip = (tri[:, 2] < near_clip)
-                clip_count = clip.sum()
-                if clip_count == 0:
-                    # # Lucky us, the issue is resolved (likely a different triangle
-                    # # already clipped for us). Let's accept this triangle now.
-                    # obj_frame_data.faces_kept[i] = True
-
-                    # TODO
-                    # Not lucky us. If this happens then we likely lost information
-                    raise Exception("You messed up. You modified a partially \
-                                    behind triangle earlier and now we can't \
-                                    properly rebuild this one!")
-                    pass
-                elif clip_count == 1:
-                    clip_idx = np.where(clip)[0][0]
-                    index_next = (clip_idx + 1) % 3
-                    index_prev = (clip_idx - 1 + 3) % 3
-                    
-                    v_clipped = tri[clip_idx]
-                    v_next = tri[index_next]
-                    v_prev = tri[index_prev]
-                    
-                    frac_next = (near_clip - v_clipped[2]) / (v_next[2] - v_clipped[2])
-                    frac_prev = (near_clip - v_clipped[2]) / (v_prev[2] - v_clipped[2])
-                    
-                    clip_point_next = v.lerp(v_clipped, v_next, frac_next)
-                    clip_point_prev = v.lerp(v_clipped, v_prev, frac_prev)
-                    
-                    # TODO write the rest
-                    
-                    pass
-                elif clip_count == 2:  # shorten existing triangle
-                    # pseudocode...
-                    # figure out the vertex that will not be clipped
-                    # figure out the vertex after this one
-                    # figure out the vertex before this one
-                    no_clip_idx = np.where(~clip)[0][0]
-                    index_next = (no_clip_idx + 1) % 3
-                    index_prev = (no_clip_idx - 1 + 3) % 3
-                    
-                    v_not_clipped = tri[no_clip_idx]
-                    v_next = tri[index_next]
-                    v_prev = tri[index_prev]
-                    
-                    frac_next = (near_clip - v_not_clipped[2]) / (v_next[2] - v_not_clipped[2])
-                    frac_prev = (near_clip - v_not_clipped[2]) / (v_prev[2] - v_not_clipped[2])
-                    
-                    # I need to give an index, an array of vertices, an array of faces,
-                    # a non_clip index, clip_next index, clip_prev index, next_frac, and prev_frac
-                    # It should return a tuple of 3 vertices which represent the triangle.
-                        
-
-                    # new_v_next = v.lerp(v_not_clipped, v_next, frac_next)
-                    # new_v_prev = v.lerp(v_not_clipped, v_prev, frac_prev)
-                    
-                    # build the new clip space vertices (append)
-                    # Do the steps in reverse. This should hopefully assemble
-                    # our modified triangle vertices with the points in the same
-                    # place (clipped this time of course).
-                    # tri_new = np.ndarray(shape=3, dtype=np.float64)
-                    # tri_new[no_clip_idx] = v_not_clipped
-                    # tri_new[index_next] = new_v_next
-                    # tri_new[index_prev] = new_v_prev
-                    new_vert_tri = self.create_clipped_vert_tri(vertex_out.clip_position, obj_frame_data.vertex_faces, frac_next, frac_prev, i, no_clip_idx, index_next, index_prev, shape=(3,4))
-                    # new_vert_next = new_vert_tri[index_next]
-                    # new_vert_prev = new_vert_tri[index_prev]
-                    # I know this will contain duplicates. But I really don't feel
-                    # like dealing with sharing vertices at the moment.
-                    # v_buffer.positions.extend(new_vert_tri)
-                    # future_i = len(vertex_out.clip_position) + len(v_buffer.p_indices)
-                    # v_buffer.p_indices.append([future_i + index_prev, future_i + no_clip_idx, future_i + index_next])
-                    self.append_new_triangle_to_v_buffer(vertex_out.clip_position, v_buffer.positions, v_buffer.p_indices, new_vert_tri, no_clip_idx, index_next, index_prev)
-                    
-                    # # We must make it visible again
-                    # obj_frame_data.faces_kept[i] = True
-                    
-                    
-                    # build the new normal vertices (append)
-                    
-                    # n_not_clipped = tri[no_clip_idx]
-                    # n_next = tri[index_next]
-                    # n_prev = tri[index_prev]
-                    # new_n_next = v.lerp(v_not_clipped, v_next, frac_next)
-                    # new_n_prev = v.lerp(v_not_clipped, v_prev, frac_prev)
-                    # normal_tri_new = np.ndarray(shape=3, dtype=np.float64)
-                    if vertex_out.normal is not None:
-                        # tri_normals_indices = r_object.normal_faces[i]
-                        new_normal_tri = self.create_clipped_vert_tri(vertex_out.normal, obj_frame_data.normal_faces, frac_next, frac_prev, i, no_clip_idx, index_next, index_prev, shape=(3,3))
-                        self.append_new_triangle_to_v_buffer(vertex_out.normal, v_buffer.normals, v_buffer.n_indices, new_normal_tri, no_clip_idx, index_next, index_prev)
-                    
-                    # # build the new uv vertices (append)
-                    if vertex_out.uv is not None:
-                        # tri_uv_indices = r_object.uv_faces[i]
-                        new_uv_tri = self.create_clipped_vert_tri(vertex_out.uv, obj_frame_data.uv_faces, frac_next, frac_prev, i, no_clip_idx, index_next, index_prev, shape=(3,2))
-                        self.append_new_triangle_to_v_buffer(vertex_out.uv, v_buffer.uvs, v_buffer.t_indices, new_uv_tri, no_clip_idx, index_next, index_prev)
-                    
-                    # Actually, we can skip building any new triangles.
-                    # If we replace at the exact same spot then we should be good
-                    # build a new vertex triangle (replace current)
-                    # build a new normal triangle (replace current)
-                    # build a new uv triangle (replace current)
-                    
-                    pass
-                else:
-                    raise Exception("How did we get here?")
-                pass
-            # Now we need to build our new triangles
-            if len(v_buffer.positions) != 0:
-                vertex_out.clip_position = np.vstack([vertex_out.clip_position, np.array(v_buffer.positions, dtype=np.float64)])
-            if vertex_out.normal is not None and len(v_buffer.normals) != 0:
-                vertex_out.normal = np.vstack([vertex_out.normal, np.array(v_buffer.normals, dtype=np.float64)])
-            if vertex_out.uv is not None and len(v_buffer.uvs) != 0:
-                vertex_out.uv = np.vstack([vertex_out.uv, np.array(v_buffer.uvs, dtype=np.float64)])
-            pass
-        
-            # Add indices
-            if len(v_buffer.p_indices) != 0:
-                obj_frame_data.vertex_faces = np.vstack([obj_frame_data.vertex_faces, np.array(v_buffer.p_indices, dtype=np.int32)])
-            if len(v_buffer.n_indices) != 0:
-                obj_frame_data.normal_faces = np.vstack([obj_frame_data.normal_faces, np.array(v_buffer.n_indices, dtype=np.int32)])
-            if len(v_buffer.t_indices) != 0:
-                obj_frame_data.uv_faces = np.vstack([obj_frame_data.uv_faces, np.array(v_buffer.t_indices, dtype=np.int32)])
-            
-            # Extend faces_kept
-            obj_frame_data.faces_kept = np.concatenate([obj_frame_data.faces_kept, np.ones(len(v_buffer.p_indices), dtype=bool)])
+            self.clip_faces(obj_frame_data, partially_behind_z_idx)
             
             Profiler.profile_accumulate_end("draw_polygons: cull")
             
@@ -942,7 +1071,7 @@ class Renderer:
             self.assemble(obj_frame_data, obj_frame_data.vertex_faces, obj_frame_data.normal_faces, obj_frame_data.uv_faces)
             Profiler.profile_accumulate_end("draw_polygons: assemble")
             
-            V_ndc, inv_w = v.perspective_divide(vertex_out.clip_position)
+            V_ndc, inv_w = v.perspective_divide(obj_frame_data.clip_space_vertices)
             obj_frame_data.ndc_vertices = V_ndc
             obj_frame_data.inverse_w = inv_w
             
@@ -957,8 +1086,8 @@ class Renderer:
             for i, _ in enumerate(obj_frame_data.vertex_faces):
                 triangle_screen_vertices = obj_frame_data.screen_space_triangles[i]
                 triangle_normals = self.get_normal_triangle(obj_frame_data.vertex_normals, obj_frame_data.normal_faces, i)
-                if vertex_out.uv is not None:
-                    triangle_uvs = self.get_uv_triangle(vertex_out.uv, obj_frame_data.uv_faces, i)
+                if obj_frame_data.uv_coords is not None:
+                    triangle_uvs = self.get_uv_triangle(obj_frame_data.uv_coords, obj_frame_data.uv_faces, i)
                 else:
                     triangle_uvs = None
                 triangle_ws = self.get_normal_triangle(obj_frame_data.inverse_w, obj_frame_data.vertex_faces, i)
@@ -967,7 +1096,11 @@ class Renderer:
                 if do_draw_faces and frag_buffer is not None:
                     # self.fill_triangle_2(frag_buffer, r_object, obj_frame_data.texture)
                     Profiler.profile_accumulate_start("draw_polygons: fragment shader")
-                    f_in = FragmentInput(frag_buffer.position_map, obj_frame_data.face_normals[i], frag_buffer.normals_map, frag_buffer.uv_map, obj_frame_data.texture)
+                    if obj_frame_data.face_normals is not None:
+                        face_normal = obj_frame_data.face_normals[i]
+                    else:
+                        face_normal = np.array([0,0,0], dtype=np.float64)  # failsafe
+                    f_in = FragmentInput(frag_buffer.position_map, face_normal, frag_buffer.normals_map, frag_buffer.uv_map, obj_frame_data.texture)
                     f_out: np.ndarray = r_object.fragment_shader(f_in)
                     Profiler.profile_accumulate_end("draw_polygons: fragment shader")
                     # ignore alpha channel for now
@@ -1224,14 +1357,14 @@ class Renderer:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                             if event.button == 1:  # Left click
                                 self.dragging = True
-                                self.last_mouse_pos = pygame.mouse.get_pos()
+                                self.last_mouse_pos = event.pos
                                 global hover_triangle_index
                                 print(f"Red triangle index is {hover_triangle_index}")
                     elif event.type == pygame.MOUSEBUTTONUP:
                         if event.button == 1:
                             self.dragging = False
                     elif event.type == pygame.MOUSEMOTION and self.dragging:
-                        x, y = pygame.mouse.get_pos()
+                        x, y = event.pos
                         dx = x - self.last_mouse_pos[0]
                         dy = y - self.last_mouse_pos[1]
                         self.last_mouse_pos = (x, y)

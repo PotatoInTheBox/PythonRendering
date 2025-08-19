@@ -76,6 +76,9 @@ class ObjectFrameData:
         """An array of faces which consist of 3 indicies. These are in reference
         to the original verticies and thus must be the same size as the array
         they are pulling from."""
+        self.world_normals: NDArray[np.float64] = None # type: ignore
+        """An array of vertices that represent where the normals face in the
+        world space."""
         
         # variables that can be None
         self.texture: Texture|None = None

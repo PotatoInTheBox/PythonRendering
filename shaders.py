@@ -61,7 +61,8 @@ class VertexOutput:
     clip_position: np.ndarray  # (4,)
     """The (x,y,z,w) clip position of this vertex. This can be gotten by applying
     the world_view_matrix"""
-    normal: np.ndarray|None = None         # (3,)
+    face_normals: np.ndarray|None = None   # (3,)
+    world_normal: np.ndarray|None = None         # (3,)
     """The (x,y,z) direction the surface normal if facing. Not guarenteed to be normalized.
     (For smooth shading).
     Usually we want this in world space."""
@@ -106,7 +107,7 @@ def default_vertex_shader(v: VertexInput) -> VertexOutput:
     
     # Only output normals to worldspace if we have any
     if v.normal is not None:
-        out.normal = (v.worldMatrix[:3, :3] @ v.normal.T).T
+        out.world_normal = (v.worldMatrix[:3, :3] @ v.normal.T).T
     
     # Copy over the uv's. We aren't doing anything to them yet.
     # What would I even need to modify them for?

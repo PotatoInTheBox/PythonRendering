@@ -7,6 +7,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import Normalize
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import matplotlib as mpl
+mpl.rcParams['axes3d.mouserotationstyle'] = 'azel'
 
 def draw_array(image: np.ndarray):
     h, w = image.shape[:2]
@@ -75,4 +79,39 @@ def plot_area_distribution(title, x_label, y_label, data):
     plt.ylabel(y_label)
     plt.title(title)
     plt.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
+
+def plot_vertices_triangles(vertices: np.ndarray, triangles: np.ndarray):
+    """
+    vertices: (N, 4) or (N, 3) array of vertex positions (ignore 4th component)
+    triangles: (M, 3) array of indices into vertices forming triangles
+    """
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Extract x,y,z from vertices (ignore w if present)
+    verts_xyz = vertices[:, :3]
+    verts_xyz = verts_xyz[:, [0, 2, 1]]
+
+    # Plot vertices
+    ax.scatter(verts_xyz[:, 0], verts_xyz[:, 1], verts_xyz[:, 2], c='r', s=20) # type: ignore
+    
+    # Annotate each vertex with its index
+    for i, (x, y, z) in enumerate(verts_xyz):
+        ax.text(x, y, z, str(i), color='black', fontsize=8)
+
+    # Plot filled triangles with random color at 10% opacity
+    for tri in triangles:
+        pts = verts_xyz[tri]
+        tri_poly = Poly3DCollection([pts])
+        tri_poly.set_facecolor(np.append(np.random.rand(3), 0.1))  # RGBA
+        tri_poly.set_edgecolor('k')  # optional black edges
+        ax.add_collection3d(tri_poly)
+
+    # ax.view_init(elev=-70, azim=-60)
+
+    ax.set_xlabel('X (left-right)')
+    ax.set_ylabel('Z (forward-backward)')
+    ax.set_zlabel('Y (up-down)')
+    ax.set_title('3D Vertices and Triangles')
     plt.show()
