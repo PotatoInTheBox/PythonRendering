@@ -115,3 +115,27 @@ def plot_vertices_triangles(vertices: np.ndarray, triangles: np.ndarray):
     ax.set_zlabel('Y (up-down)')
     ax.set_title('3D Vertices and Triangles')
     plt.show()
+
+def plot_vertices(vertices: np.ndarray):
+    """
+    vertices: (N, 4) or (N, 3) array of vertex positions (ignore 4th component)
+    """
+    fig = plt.figure(figsize=(6, 6))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Extract x,y,z (ignore w if present)
+    verts_xyz = vertices[:, :3]
+    verts_xyz = verts_xyz[:, [0, 2, 1]]
+
+    # Plot vertices
+    ax.scatter(verts_xyz[:, 0], verts_xyz[:, 1], verts_xyz[:, 2], c='r', s=20) # type: ignore
+
+    # Annotate with index
+    for i, (x, y, z) in enumerate(verts_xyz):
+        ax.text(x, y, z, str(i), color='black', fontsize=8)
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Z')
+    ax.set_zlabel('Y')
+    ax.set_title('3D Vertices')
+    plt.show()

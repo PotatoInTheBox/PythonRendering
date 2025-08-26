@@ -9,8 +9,8 @@ import debug
 def sample(texture: Texture, uv: np.ndarray):
     u = uv[..., 0]  # shape (X, Y)
     v = uv[..., 1]  # shape (X, Y)
-    tex_x = np.clip((u * texture.width).astype(np.int32), 0, texture.width - 1)
-    tex_y = np.clip((v * texture.height).astype(np.int32), 0, texture.height - 1)
+    tex_x = np.round(u * texture.width).astype(np.int32) % texture.width
+    tex_y = np.round(v * texture.height).astype(np.int32) % texture.height
     sampled = texture.image[tex_y, tex_x]
     return sampled
 
@@ -174,7 +174,9 @@ def skybox_vertex_shader(v: VertexInput) -> VertexOutput:
     world_dir = (rot_only @ world_pos.T).T
 
     # Clip space
-    clip = (v.projectionMatrix @ world_dir.T).T
+    # clip = (v.projectionMatrix @ world_dir.T).T
+    clip = (v.worldViewProjectionMatrix @ v.position.T).T
+    
 
     out = VertexOutput(world_position=world_dir, clip_position=clip)
     out.uv = v.uv
@@ -190,11 +192,20 @@ def skybox_fragment_shader(f: FragmentInput, brightness: float = 1.0) -> np.ndar
     if f.texture is not None and f.uv is not None:
         uv = f.uv.copy()
         uv[...,1] = 1.0 - uv[...,1]
+        
+        # NOTE: this is so funny to watch
+        # factor = 0.05
+        # center = uv.mean(axis=(0, 1), keepdims=True)
+        # uv = uv + (center - uv) * factor
+        
         sampled = sample(f.texture, uv)
         result = sampled * brightness
         # result = sample(f.texture, f.uv) * brightness
     else:
-        result = np.array((0.0, 0.0, 0.0), dtype=np.float32)  # fallback black
+        PURPLE = (1.0, 0.0, 1.0)
+        colors = np.array(PURPLE, dtype=np.float32)  # fallback pink
+        H, W = f.world_position.shape[:2]
+        result = np.tile(colors, (H, W, 1))
 
     alpha = np.ones(result.shape[:2] + (1,), dtype=result.dtype)
     return np.concatenate((result, alpha), axis=-1)

@@ -7,6 +7,8 @@ from renderable_object import RenderableObject
 
 import numpy as np
 from numpy.typing import NDArray
+from debug import plot_vertices
+from debug import plot_vertices_triangles
 
 render_config = global_config
 
@@ -164,8 +166,6 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
     """
     verts = V_clip[faces]  # (F, 3, 4)
 
-    
-    
     x, y, z, w = verts[..., 0], verts[..., 1], verts[..., 2], verts[..., 3]
 
     # Check each plane
@@ -189,23 +189,10 @@ def cull_faces(V_clip: np.ndarray, faces: np.ndarray):
     # 1. ANY vertex behind camera (z <= 0) → drop
     behind_camera = outside_near.any(axis=1)
 
-    
-    
     # TODO temp float
     # near_clip = 0.01
-    # vertex_behind_z = (z < near_clip)   # (F, 3) boolean per vertex
-    # behind_z = vertex_behind_z.sum(axis=1)  # (F,) count per triangle
-    
-    # Compute normals in clip space
-    a = verts[:, 1, :3] / verts[:, 1, [3]] - verts[:, 0, :3] / verts[:, 0, [3]]
-    b = verts[:, 2, :3] / verts[:, 2, [3]] - verts[:, 0, :3] / verts[:, 0, [3]]
-    normals = np.cross(a, b)
-    normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-8)
-    
-    backfacing = normals[:, 2] < 0  # Facing -Z means away from camera → drop
 
     # Faces to keep
-    # faces_kept = ~(behind_camera | fully_outside | backfacing)
     faces_kept = ~(behind_camera | fully_outside)
     
     partially_behind_z = outside_near.any(axis=1) & ~outside_near.all(axis=1)
@@ -225,9 +212,10 @@ def perspective_divide(V_clip: np.ndarray) -> Tuple[np.ndarray,np.ndarray]:
         np.ndarray:
             NDC positions (N, 3), after dividing by w.
     """
-    # Perspective divide
-    V_ndc = V_clip[:, :3] / V_clip[:, 3:4]  # Shape: (N, 3)
-    inv_w = 1.0 / V_clip[:, 3:4]
+    # Perspective divide (division by zero sometimes happens)
+    w = V_clip[:, 3:4]
+    V_ndc = V_clip[:, :3] / w  # Shape: (N, 3)
+    inv_w = 1.0 / w
     return V_ndc, inv_w
 
 

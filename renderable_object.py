@@ -44,12 +44,53 @@ class RenderableObject:
         
         self.transform = Transform()
         self.name = name
+        
+        self.__has_warned_degenerate_triangles = False
+        self.remove_degenerate_triangles()
+
         if normalize:
             # At startup we conver the verticies to values between -1 and 1.
             self.normalize()
         
         self.vertex_shader = default_vertex_shader
         self.fragment_shader = default_fragment_shader
+        
+        
+    
+    def remove_degenerate_triangles(self, eps=1e-12):
+        """
+        Removes degenerate faces (zero/near-zero area) and their correlated
+        uv_faces and normal_faces.
+        """
+        if len(self.faces) == 0:
+            return
+
+        # Grab actual triangle vertices
+        tri = self.vertices[self.faces]  # (M, 3, 3)
+
+        # Compute cross product (face normals before normalization)
+        a = tri[:, 1] - tri[:, 0]
+        b = tri[:, 2] - tri[:, 0]
+        normals = np.cross(a, b)
+
+        # Length = 2 * triangle area
+        lengths = np.linalg.norm(normals, axis=1)
+
+        # Mask for valid (non-degenerate) faces
+        valid_mask = lengths > eps
+        
+        # Debug hook: if any degenerate triangles exist
+        if self.__has_warned_degenerate_triangles == False and not np.all(valid_mask):
+            self.__has_warned_degenerate_triangles = True
+            print(f"Warning: Found at least 1 degenerate triangle in {self.name}! Please make sure all triangles have a non-zero area.")
+            print("Degenerate triangles will be removed!")
+
+        # Filter faces + correlated attributes
+        self.faces = self.faces[valid_mask]
+        if len(self.uv_faces) == len(valid_mask):
+            self.uv_faces = self.uv_faces[valid_mask]
+        if len(self.normal_faces) == len(valid_mask):
+            self.normal_faces = self.normal_faces[valid_mask]
 
     def normalize(self):
         v = np.array(self.vertices)  # Shape: (N, 3)
@@ -64,11 +105,14 @@ class RenderableObject:
 
     @staticmethod
     def parse_face(point_arr: list[str], reverse_faces: bool) -> tuple[list[tuple[int,int,int]],
-                                                                    list[tuple[int,int,int]],
-                                                                    list[tuple[int,int,int]]]:
+                                                                    list[tuple[int,int,int]]|None,
+                                                                    list[tuple[int,int,int]]|None]:
         faces = []
         uv_faces = []
         normal_faces = []
+        
+        do_uv = True
+        do_normals = True
         
         if len(point_arr) < 3:
             raise Exception("Cannot build tri if less than 3 points are present!")
@@ -84,27 +128,33 @@ class RenderableObject:
                 v_face_tri.append(int(face_data[0]) - 1)
 
                 # uv index
-                if len(face_data) > 1 and face_data[1] != '':
+                if do_uv and len(face_data) > 1 and face_data[1] != '':
                     uv_face_tri.append(int(face_data[1]) - 1)
                 else:
-                    # TODO seems wrong
-                    uv_face_tri.append(-1)
+                    do_uv = False
 
                 # normal index
-                if len(face_data) > 2 and face_data[2] != '':
+                if do_normals and len(face_data) > 2 and face_data[2] != '':
                     n_face_tri.append(int(face_data[2]) - 1)
                 else:
-                    # TODO seems wrong
-                    n_face_tri.append(-1)
+                    do_normals = False
 
             if reverse_faces:
                 v_face_tri.reverse()
-                uv_face_tri.reverse()
-                n_face_tri.reverse()
+                if do_uv:
+                    uv_face_tri.reverse()
+                if do_normals:
+                    n_face_tri.reverse()
 
             faces.append(tuple(v_face_tri))
-            uv_faces.append(tuple(uv_face_tri))
-            normal_faces.append(tuple(n_face_tri))
+            if do_uv:
+                uv_faces.append(tuple(uv_face_tri)) # type: ignore
+            else:
+                uv_faces = None
+            if do_normals:
+                normal_faces.append(tuple(n_face_tri)) # type: ignore
+            else:
+                normal_faces = None
 
         return faces, uv_faces, normal_faces
 
@@ -138,8 +188,10 @@ class RenderableObject:
                 elif parts[0] == 'f':
                     faces, uv_faces, normal_faces = RenderableObject.parse_face(parts[1:], reverse_faces)
                     triangles.extend(faces)
-                    all_uv_faces.extend(uv_faces)
-                    all_normal_faces.extend(normal_faces)
+                    if uv_faces is not None:
+                        all_uv_faces.extend(uv_faces)
+                    if normal_faces is not None:
+                        all_normal_faces.extend(normal_faces)
             
             for idx, (face_idx, normal_idx) in enumerate(zip(triangles, all_normal_faces)):
                 if -1 in normal_idx:
@@ -168,7 +220,7 @@ class RenderableObject:
         if texture_filepath is not None:
             texture_obj = Texture(texture_filepath)
 
-        return RenderableObject(
+        renderable_object = RenderableObject(
             np.array(vertices),
             np.array(triangles),
             name=filepath,
@@ -178,6 +230,8 @@ class RenderableObject:
             normals=np.array(normals),
             normal_faces=all_normal_faces
         )
+        
+        return renderable_object
 
     @staticmethod
     def from_data(vertices: np.ndarray, faces: np.ndarray, normalize=True):

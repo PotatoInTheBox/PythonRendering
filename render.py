@@ -30,6 +30,7 @@ import debug as debug
 from shaders import VertexInput, skybox_fragment_shader, skybox_vertex_shader
 from shaders import VertexOutput
 from shaders import FragmentInput
+import scenes
 
 import pygame
 import sys
@@ -59,36 +60,9 @@ debug_win.create_slider_input_float("CAMERA_SPEED", render_config.camera_speed, 
 debug_win.create_slider_input_float("CAMERA_SENSITIVITY", render_config.camera_sensitivity, min_val=0.01, max_val=20)
 
 # ========== Object initialization ==========
-MONKEY_OBJ = RenderableObject.load_new_obj("./models/blender_monkey.obj")
-NAME_OBJ = RenderableObject.load_new_obj("./models/name.obj")
-SHIP_OBJ = RenderableObject.load_new_obj("./models/ship.obj")
-FOX_OBJ = RenderableObject.load_new_obj("./models/fox.obj", texture_filepath="./textures/colMap.bytes")
-FOX_SITTING_OBJ = RenderableObject.load_new_obj("./models/foxSitting.obj", texture_filepath="./textures/colMap.bytes")
-CLOUD_OBJ = RenderableObject.load_new_obj("./models/cloud.obj")
-DRAGON_OBJ = RenderableObject.load_new_obj("./models/dragon.obj")
-FLOOR_OBJ = RenderableObject.load_new_obj("./models/floor.obj", texture_filepath="./textures/uvGrid.bytes")
-DAVE_OBJ = RenderableObject.load_new_obj("./models/dave.obj", texture_filepath="./textures/daveTex.bytes")
-SKYBOX_OBJ = RenderableObject.load_new_obj("./models/skybox.obj", texture_filepath="./textures/skyboxTex.bytes")
-SKYBOX_OBJ.vertex_shader = skybox_vertex_shader
-SKYBOX_OBJ.fragment_shader = skybox_fragment_shader
-
-
-MONKEY_OBJ.transform.translate([-3,0,-1])  # we will have this on the left of our initial camera (slightly further)
-NAME_OBJ.transform.translate([0,0,0])  # We will have this at the origin
-NAME_SCALE = 1.8
-NAME_OBJ.transform.scale([NAME_SCALE,NAME_SCALE,NAME_SCALE])
-SHIP_OBJ.transform.translate([3,-1,1])  # we will have this on the right of our initial camera (slightly closer) (slightly up)
-CLOUD_OBJ.transform.translate([1, 10, 4])
-# Place these behind camera since they are kind of intensive (camera isn't at 0 tho...)
-FOX_OBJ.transform.translate([2, -4, 5])
-# FOX_SITTING_OBJ.transform.translate([0.5, -4, 5])
-FOX_SITTING_OBJ.transform.translate([0, 0.25, 2])
-DRAGON_OBJ.transform.translate([-1, -4, 5])
-DRAGON_OBJ.transform.rotate([0,np.pi,0])
-FLOOR_OBJ.transform.translate([0,-0.5,2])
-DAVE_OBJ.transform.translate([-1.0,2,0])
-SKYBOX_OBJ.transform.scale([900,900,900])
-# SKYBOX_OBJ.transform.rotate([0,0,0])
+# RENDER_OBJECTS = scenes.scene_all()
+# RENDER_OBJECTS = scenes.scene_ship_only()
+RENDER_OBJECTS = scenes.scene_all()
 
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
@@ -102,14 +76,6 @@ debug_win.create_slider_input_float("WAVE_SPEED", render_config.wave_speed, min_
 debug_win.create_debug_label("Camera Position", render_config.camera_position)
 debug_win.create_debug_label("Camera Rotation", render_config.camera_rotation)
 
-# RENDER_OBJECTS = [MONKEY_OBJ, NAME_OBJ, SHIP_OBJ, FOX_OBJ, CLOUD_OBJ, FOX_SITTING_OBJ, DRAGON_OBJ, FLOOR_OBJ, DAVE_OBJ, SKYBOX_OBJ]  # all the objects we want rendered
-# RENDER_OBJECTS = [FOX_SITTING_OBJ, DRAGON_OBJ]
-# RENDER_OBJECTS = [NAME_OBJ]
-# RENDER_OBJECTS = [FLOOR_OBJ, FOX_SITTING_OBJ]
-# RENDER_OBJECTS = [FLOOR_OBJ, MONKEY_OBJ]
-# RENDER_OBJECTS = [FOX_SITTING_OBJ]
-RENDER_OBJECTS = [FOX_SITTING_OBJ, FLOOR_OBJ, SKYBOX_OBJ]
-# RENDER_OBJECTS = [FLOOR_OBJ]
 
 # ========== Performance metrics ==========
 ENABLE_PROFILER = True
@@ -145,7 +111,7 @@ draw_lines = False
 frame_count = 0  # count frames rendered so far
 
 hover_triangle_index = -1
-    
+
     
 
 # Fragment output is simply either the sub-buffer we write to (np.array). Or possibly
@@ -430,96 +396,6 @@ class Renderer:
         mask = ((w0 <= 0) & (w1 <= 0) & (w2 <= 0))
         return w0, w1, w2, inv_area, mask
 
-    def _shade_textured(self, sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj):
-        # ----- Perspective-correct UV interpolation -----
-        (u1, v1), (u2, v2), (u3, v3) = uv_triplet
-        inv_w1, inv_w2, inv_w3 = tri_inv_w
-        u_w = w0_n * u1 * inv_w1 + w1_n * u2 * inv_w2 + w2_n * u3 * inv_w3
-        v_w = w0_n * v1 * inv_w1 + w1_n * v2 * inv_w2 + w2_n * v3 * inv_w3
-
-        # Shared perspective correction factor
-        inv_w = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
-
-        # Apply perspective correction
-        u = u_w / inv_w
-        v = v_w / inv_w
-
-        # ----- Texture sampling -----
-        tex_x = np.clip((u * texture_obj.width).astype(np.int32), 0, texture_obj.width - 1)
-        tex_y = np.clip((v * texture_obj.height).astype(np.int32), 0, texture_obj.height - 1)
-        sampled = (texture_obj.image[tex_y, tex_x] * 255.0).astype(np.uint8)
-
-        sub_rgb[update_mask] = sampled[update_mask]
-    
-    def _shade_flat(self, sub_rgb, update_mask, luminance, overwrite=False):
-        """
-        Flat shading.
-        """
-        if overwrite:
-            sub_rgb[update_mask] = np.array(luminance * np.array((255,255,255), dtype=np.float64), dtype=np.uint8)
-        else:
-            sub_rgb[update_mask] = np.array(sub_rgb[update_mask].astype(np.float64) * luminance, dtype=np.uint8)
-
-    # TODO I'm completely misunderstanding shading.
-    def _shade_blend(self, sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n=None, overwrite=False):
-        """
-        
-        """
-        if tri_n is not None:
-            light_dir = np.array([0, 1, 0], dtype=np.float64)
-            # Gourand shading
-            # ----- Perspective-incorrect normal interpolation (flat shading is fine with this) -----
-            
-            # Do dot product to get how much they are facing the sun
-            n_l = np.dot(tri_n, light_dir)
-            # normalize vals [-1,1] -> [0,1]
-            n_l = (n_l + 1.0) / 2.0
-            # use the 3 normalized barycentric coordinates to choose how much of each light to grab
-            # eg. if we are close to vertex 1 then let's say 80% of the light will be grabbed from
-            # w1_n. The other 10% and 10% are grabbed from the remaining coords.
-            l1_p = np.abs(n_l[0] * w0_n)
-            l2_p = np.abs(n_l[1] * w1_n)
-            l3_p = np.abs(n_l[2] * w2_n)
-            l_p = np.abs(l1_p) + np.abs(l2_p) + np.abs(l3_p)
-            # With our luminance value we can apply it to a color (such as white)
-            
-            # Phong shading
-            # For Phone shading we are going to do similar to above, but instead of interpolating
-            # lightness values, we interpolate normal vectors.
-            # n1, n2, n3 = tri_n
-            
-            # n = (w0_n[..., None] * n1 +
-            #     w1_n[..., None] * n2 +
-            #     w2_n[..., None] * n3)
-
-            # # Normalize normals
-            # n_norm = -n / np.linalg.norm(n, axis=-1, keepdims=True)
-
-            # # ----- Lighting -----
-            # light_dir = np.array([0, -1, 0], dtype=np.float64)
-            # light_dir /= np.linalg.norm(light_dir)
-            # intensity = np.sum(n_norm * light_dir, axis=-1, keepdims=True)
-            # intensity = (intensity + 1.0) / 2.0  # -1 → 0, 0 → 0.5, 1 → 1
-            # intensity = np.clip(intensity, 0, 1)
-            
-            if color[0] != 255 or color[1] != 0 or color[2] != 0:
-                color = (255,255,255)
-            
-            pixel_colors = l_p[..., None] * np.array(color, dtype=np.float64)
-
-            # Apply lighting to base color
-            # if overwrite:
-            #     shaded_color = (pixel_colors).astype(np.uint8)
-            #     sub_rgb[update_mask] = shaded_color[update_mask]
-            # else:
-            vals = sub_rgb[update_mask].astype(np.float64) * l_p[update_mask, None]
-            vals = np.clip(vals, 0, 255).astype(np.uint8)
-            sub_rgb[update_mask] = vals
-
-        else:
-            # No normals → solid fill
-            sub_rgb[update_mask] = color
-
     def _edge_fn(self, a, b, c):
         return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
 
@@ -528,20 +404,6 @@ class Renderer:
         B = p2[0] - p1[0]
         C = p1[0]*p2[1] - p1[1]*p2[0]
         return A, B, C
-
-    # TODO should merge fill_triangle with draw_triangle and reorganize
-    # the responsibilities.
-    # Current responbilities:
-    # fill_triangle:
-    # Compute triangle area, bounding box, barycentric coords, z buffer, fragment shader
-    # draw_triangle:
-    # Create triangles from coords (draw coord, normals, uv)
-    # TODO accept the following:
-    # screen_tri, uv_tri, normal_tri, texture_obj, render_obj, world_tri?, face_normal?
-    # Should accept as just triangles, make it easy to work with
-    # Do not think about indices at this point.
-    # They should be numpy arrays if possible
-    # I somehow have to have VertexOut passed. I have to do it in a simple way.
     
     # ChatGPT pipeline:
     # Vertex Shader – transforms per-vertex data (positions, normals, UVs) from object space 
@@ -562,94 +424,7 @@ class Renderer:
     # Fragment Shader – runs per fragment, producing the final color/depth values.
 
     # Output Merger – writes the final values to the framebuffer.
-    
-    # TODO
-    # So basically I can maybe have this pipeline (from vertex shader to fragment shader to drawing on screen):
-    # -> Vertex shader (transform vertices into coords that can map to the screen)
-    # -> Cull mask (use back-face culling and clip space to remove triangles
-    # that are out of bounds)
-    # -> Primitive assembly (assemble vertices, normals, uv coords into triangles)
-    # -> Perspective divide (kinda on it's own right now but is critical)
-    # -> Rasterize (apply barycentric interpolation to create a "fragment" which the shader can work with)
-    # -> Fragment shader (expects a collection of values (in screen space) perspective corrected
-    # to determine the final color of a pixel on screen)
-    # -> Output (use the output of the fragments to write to rgb_buffer)
-    # -> 
-    # -> 
-    # -> 
-    # -> 
-    # -> 
-    
-    @Profiler.timed()
-    def fill_triangle(self, p1: Tuple[float,float,float], p2: Tuple[float,float,float], p3: Tuple[float,float,float], tri_inv_w: Tuple[float,float,float], color: Tuple[int, int, int] = COLOR_RED, uv_triplet=None, tri_n=None, texture_obj: Texture|None=None, render_object: RenderableObject|None = None):
-        # p1, p2, p3 = (p1[0], p1[1], p1[2]), (p2[0], p2[1], p2[2]), (p3[0], p3[1], p3[2])
-        # NOTE: TODO: WARNING: Watch out for negative numbers. Often you may have to flip values.
-        # eg. Barycentric coordinates are inside triangle if all are negative, this also means all teh values have a negative sign.
-        # So multiplying them means getting a value that also has a negative sign (eg. colors)
-        # def cross(a, b, c):
-        #     # Computes twice the signed area of triangle abc.
-        #     # Used to calculate barycentric coordinates and inside-triangle tests.
-        #     return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
-        
-        area = self._edge_fn(p1, p2, p3)
-        if area == 0: return  # skip degenerate triangle
 
-        # Bounding box and pixel grid
-        min_x, max_x, min_y, max_y, X, Y = self._compute_pixel_grid(p1, p2, p3)
-        if min_x > max_x or min_y > max_y: return  # Triangle is completely outside screen bounds
-
-        # Barycentric weights
-        w0, w1, w2, inv_area, mask = self._compute_barycentrics(X, Y, p1, p2, p3)
-        w0_n, w1_n, w2_n = w0 * inv_area, w1 * inv_area, w2 * inv_area
-        
-        # Z-depth buffer
-        z = w0_n * p1[2] + w1_n * p2[2] + w2_n * p3[2]
-        sub_zbuffer = self.z_buffer[min_y:max_y+1, min_x:max_x+1]
-        sub_rgb = self.rgb_buffer[min_y:max_y+1, min_x:max_x+1]
-        update_mask = mask & (z < sub_zbuffer)
-        sub_zbuffer[update_mask] = z[update_mask]
-
-        render_object_2: RenderableObject = render_object # type: ignore
-        # frag_in: FragmentInput = FragmentInput(world_position=None, face_normal=None)
-        
-        # Try to texture the tri with a texture object and uv data.
-        # Draw onto the sub buffer
-        if texture_obj and uv_triplet:
-            # self._shade_flat(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n)
-            self._shade_textured(sub_rgb, update_mask, uv_triplet, tri_n, tri_inv_w, w0_n, w1_n, w2_n, texture_obj)
-            overwrite = False
-            (u1, v1), (u2, v2), (u3, v3) = uv_triplet
-            inv_w1, inv_w2, inv_w3 = tri_inv_w
-            u_w = w0_n * u1 * inv_w1 + w1_n * u2 * inv_w2 + w2_n * u3 * inv_w3
-            v_w = w0_n * v1 * inv_w1 + w1_n * v2 * inv_w2 + w2_n * v3 * inv_w3
-            denom = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
-            # frag_in.uv = np.array([u_w, v_w]) / denom
-        else:
-            overwrite = True
-        
-        if tri_n:
-            # (x_n1, y_n1), (x_n2, y_n2), (x_n3, y_n3) = tri_n
-            # inv_w1, inv_w2, inv_w3 = tri_inv_w
-            # x_n_w = w0_n * x_n1 * inv_w1 + w1_n * x_n2 * inv_w2 + w2_n * x_n3 * inv_w3
-            # y_n_w = w0_n * y_n1 * inv_w1 + w1_n * y_n2 * inv_w2 + w2_n * y_n3 * inv_w3
-            # denom = w0_n * inv_w1 + w1_n * inv_w2 + w2_n * inv_w3
-            # frag_in.normal = np.array([x_n_w, y_n_w]) / denom
-            pass
-        
-        # frag_in.texture = texture_obj
-        # render_object_2.fragment_shader(frag_in)
-        
-        # Try to shade the triangle.
-        # If vertex normals exist then shade smoothly
-        # If not then use the "face_shade" value from -1 to 1
-        # to shade (normalized to [0,1])
-        # By default both shading functions will multiply by a luminocity value
-        # if a texture doesn't exist then a "overwrite" variable will be set to True
-        # to indicate setting the value instead of multiplying it (else we have an invis tri).
-        # self._shade_blend(sub_rgb, update_mask, color, w0_n, w1_n, w2_n, tri_n, overwrite)
-        self._shade_flat(sub_rgb, update_mask, color, overwrite)
-
-    @Profiler.timed()
     def draw_triangle(self, p1: Tuple[int,int], p2: Tuple[int, int], p3: Tuple[int, int], color: Tuple[int, int, int] = COLOR_WHITE):
         self.draw_line(p1, p2, color)
         self.draw_line(p2, p3, color)
@@ -659,106 +434,6 @@ class Renderer:
         self.draw_line_skimage(p1, p2, color)
         self.draw_line_skimage(p2, p3, color)
         self.draw_line_skimage(p3, p1, color)
-    
-    @Profiler.timed()
-    def draw_faces(self, obj_frame_data: ObjectFrameData):
-        """
-        Draws triangles on the screen with optional wireframe or filled faces.
-
-        Parameters:
-            tri_screen_all (np.ndarray):
-                Screen-space triangles (F, 3, 3).
-            colors (np.ndarray):
-                Color for each face (F, 3).
-            faces (np.ndarray):
-                Face indices for drawing (F, 3).
-        """
-        global hover_triangle_index
-        hover_triangle_index = -1
-        # ========= DRAWING =========
-        for i, face in enumerate(obj_frame_data.vertex_faces):
-            tri_screen = obj_frame_data.screen_space_triangles[i]
-            if draw_lines:
-                self.draw_triangle_with_z(tri_screen[0][0:3], tri_screen[1][0:3], tri_screen[2][0:3], COLOR_GREEN)
-        for i, face in enumerate(obj_frame_data.vertex_faces):
-            Profiler.profile_accumulate_start("draw_faces: project")
-
-            # apply light to this face
-            color = obj_frame_data.face_shade[i]
-
-            tri_screen = obj_frame_data.screen_space_triangles[i]
-            tri_inv_w = obj_frame_data.inverse_w[face]
-            if obj_frame_data.uv_faces.size > 0:
-                uv_i1, uv_i2, uv_i3 = obj_frame_data.uv_faces[i][0], obj_frame_data.uv_faces[i][1], obj_frame_data.uv_faces[i][2]
-                if -1 not in (uv_i1, uv_i2, uv_i3):
-                    tri_uv = (obj_frame_data.uv_coords[uv_i1], obj_frame_data.uv_coords[uv_i2], obj_frame_data.uv_coords[uv_i3])
-                else:
-                    tri_uv = None
-            else:
-                tri_uv = None
-            
-            if obj_frame_data.normal_faces.size > 0:
-                n0_i = obj_frame_data.normal_faces[i][0]
-                n1_i = obj_frame_data.normal_faces[i][1]
-                n2_i = obj_frame_data.normal_faces[i][2]
-                tri_n = (obj_frame_data.object.normals[n0_i], obj_frame_data.object.normals[n1_i], obj_frame_data.object.normals[n2_i])
-            else:
-                tri_n = None
-
-            # global hover_triangle_index
-            if point_in_triangle((mouse_x, mouse_y), tri_screen[0], tri_screen[1], tri_screen[2]):
-                color = COLOR_RED
-                hover_triangle_index = i
-
-            Profiler.profile_accumulate_end("draw_faces: project")
-            Profiler.profile_accumulate_start("draw_faces: draw")
-
-            if do_draw_faces or draw_z_buffer:
-                self.fill_triangle(tri_screen[0], tri_screen[1], tri_screen[2], tri_inv_w, color, tri_uv, tri_n, obj_frame_data.texture) # type: ignore
-            # if draw_lines:
-            #     self.draw_triangle(tri_screen[0][0:2], tri_screen[1][0:2], tri_screen[2][0:2], COLOR_GREEN)
-
-            Profiler.profile_accumulate_end("draw_faces: draw")
-    
-    def create_clipped_vert_tri(self, verts: np.ndarray, face_indices: np.ndarray, frac_next: float, frac_prev: float, i: int, non_clip_idx: int, clip_next_idx: int, clip_prev_idx: int, shape=(3,4)):
-        tri_indices = face_indices[i]
-        tri = verts[tri_indices]
-        vert_not_clipped = tri[non_clip_idx]
-        vert_next = tri[clip_next_idx]
-        vert_prev = tri[clip_prev_idx]
-        new_vert_next = v.lerp(vert_not_clipped, vert_next, frac_next)
-        new_vert_prev = v.lerp(vert_not_clipped, vert_prev, frac_prev)
-        tri_new = np.ndarray(shape=shape, dtype=np.float64)
-        tri_new[non_clip_idx] = vert_not_clipped
-        tri_new[clip_next_idx] = new_vert_next
-        tri_new[clip_prev_idx] = new_vert_prev
-        return tri_new
-
-    def create_clipped_vert_tri_quad(self, verts: np.ndarray, face_indices: np.ndarray, frac_next: float, frac_prev: float, i: int, clip_idx: int, next_idx: int, prev_idx: int, shape=(3,4)):
-        tri_indices = face_indices[i]
-        tri = verts[tri_indices]
-
-        vert_prev = tri[prev_idx]
-        vert_next = tri[next_idx]
-        vert_clip = tri[clip_idx]
-
-        # Generate new vertices at the intersection points
-        new_vert_prev = v.lerp(vert_clip, vert_prev, frac_prev)
-        new_vert_next = v.lerp(vert_clip, vert_next, frac_next)
-
-        # First triangle: (prev_idx, prev_clip_idx, next_idx)
-        tri0 = np.zeros(shape, dtype=np.float64)
-        tri0[clip_idx] = vert_prev
-        tri0[next_idx] = new_vert_prev
-        tri0[prev_idx] = vert_next
-
-        # Second triangle: (prev_clip_idx, next_clip_idx, next_idx)
-        tri1 = np.zeros(shape, dtype=np.float64)
-        tri1[clip_idx] = new_vert_prev
-        tri1[next_idx] = new_vert_next
-        tri1[prev_idx] = vert_next
-
-        return (tri0, tri1)  # shape (2,3,4)
 
     def append_new_triangle_to_v_buffer(self, original_vertices: np.ndarray, vertices: list[np.ndarray], indices: list[np.ndarray], tri: np.ndarray, idx_A: int, idx_B: int, idx_C: int):
         vertices.extend(tri)
@@ -770,6 +445,7 @@ class Renderer:
     # I need it to receive interpolated values and apply them to any given
     # triangle, then it needs to form a new triangle (by interpolating the
     # vertices).
+    @Profiler.timed()
     def clip_append_new(self, original_vertices: np.ndarray, original_indices: np.ndarray, vertices: list, indices: list, clip_idx: int, prev_idx: int, next_idx: int, frac_prev, frac_next, i: int, do_quad=True):
         tri_indices = original_indices[i]
         tri = original_vertices[tri_indices]
@@ -806,6 +482,7 @@ class Renderer:
     # Basically, the objective of this function is to grab our vertices and clip
     # them against the near plane
     # 
+    @Profiler.timed()
     def clip_faces(self, obj_frame_data: ObjectFrameData, face_to_clip: np.ndarray):
         # TODO make sure we are only calculating ones we kept with faces_kept
         # faces that aren't facing us are not important.
@@ -853,16 +530,16 @@ class Renderer:
                                           frac_prev, frac_next, i)
                 
                 v_buffer.face_normals.append(obj_frame_data.face_normals[i])
-                # v_buffer.face_normals.append(obj_frame_data.face_normals[i + 1])
+                v_buffer.face_normals.append(obj_frame_data.face_normals[i])
                 
-                if obj_frame_data.vertex_normals is not None:
+                if obj_frame_data.vertex_normals is not None and len(obj_frame_data.vertex_normals) > 0:
                     self.clip_append_new(obj_frame_data.vertex_normals, obj_frame_data.normal_faces, 
                                           v_buffer.normals, v_buffer.n_indices, 
                                           clip_idx, index_prev, index_next, 
                                           frac_prev, frac_next, i)
                 
                 # # build the new uv vertices (append)
-                if obj_frame_data.uv_coords is not None:
+                if obj_frame_data.uv_coords is not None and len(obj_frame_data.uv_coords) > 0:
                     self.clip_append_new(obj_frame_data.uv_coords, obj_frame_data.uv_faces, 
                                           v_buffer.uvs, v_buffer.t_indices, 
                                           clip_idx, index_prev, index_next, 
@@ -892,14 +569,14 @@ class Renderer:
                 
                 v_buffer.face_normals.append(obj_frame_data.face_normals[i])
                 
-                if obj_frame_data.vertex_normals is not None:
+                if obj_frame_data.vertex_normals is not None and len(obj_frame_data.vertex_normals) > 0:
                     self.clip_append_new(obj_frame_data.vertex_normals, obj_frame_data.normal_faces, 
                                           v_buffer.normals, v_buffer.n_indices, 
                                           no_clip_idx, index_prev, index_next, 
                                           frac_prev, frac_next, i, do_quad=False)
                 
                 # # build the new uv vertices (append)
-                if obj_frame_data.uv_coords is not None:
+                if obj_frame_data.uv_coords is not None and len(obj_frame_data.uv_coords) > 0:
                     self.clip_append_new(obj_frame_data.uv_coords, obj_frame_data.uv_faces, 
                                           v_buffer.uvs, v_buffer.t_indices, 
                                           no_clip_idx, index_prev, index_next, 
@@ -980,8 +657,10 @@ class Renderer:
             Profiler.profile_accumulate_start("draw_polygons: vertex shader")
             # Load shader values
             vertex_in = VertexInput(m, view_matrix, self.projection_matrix, mv, mvp, obj_frame_data.homogeneous_vertices)
-            vertex_in.normal = obj_frame_data.vertex_normals
-            vertex_in.uv = obj_frame_data.uv_coords
+            if len(obj_frame_data.vertex_normals) > 0:
+                vertex_in.normal = obj_frame_data.vertex_normals
+            if len(obj_frame_data.uv_coords) > 0:
+                vertex_in.uv = obj_frame_data.uv_coords
             
             # Run the shader
             vertex_out: VertexOutput = r_object.vertex_shader(vertex_in)
@@ -1016,7 +695,7 @@ class Renderer:
             
             # filter out the faces we do not want to draw, keep only the ones we want to draw.
             Profiler.profile_accumulate_start("draw_polygons: assemble")
-            self.assemble(obj_frame_data, obj_frame_data.vertex_faces, obj_frame_data.normal_faces, obj_frame_data.uv_faces)
+            self.assemble(obj_frame_data, obj_frame_data.vertex_faces, obj_frame_data.normal_faces, obj_frame_data.uv_faces, obj_frame_data.face_normals)
             Profiler.profile_accumulate_end("draw_polygons: assemble")
             
             V_ndc, inv_w = v.perspective_divide(obj_frame_data.clip_space_vertices)
@@ -1052,21 +731,9 @@ class Renderer:
                     f_out: np.ndarray = r_object.fragment_shader(f_in)
                     Profiler.profile_accumulate_end("draw_polygons: fragment shader")
                     # ignore alpha channel for now
-                    temp = f_out[..., :3]
                     frag_buffer.sub_rgb_buffer[frag_buffer.update_mask] = (f_out[..., :3][frag_buffer.update_mask] * 255).astype(np.uint8)
                     if draw_lines:
                         self.draw_triangle(triangle_screen_vertices[0][0:2], triangle_screen_vertices[1][0:2], triangle_screen_vertices[2][0:2], COLOR_GREEN)
-                
-                # if do_draw_faces or draw_z_buffer:
-                #     color = np.ndarray((255,255,255))
-                #     self.fill_triangle(triangle_screen_vertices[0], triangle_screen_vertices[1], triangle_screen_vertices[2], tri_inv_w, color, triangle_uvs, triangle_normals, obj_frame_data.texture) # type: ignore
-            
-            
-            
-            # once rasterized we need to call our fragment shader to get
-            # a fragment. Afterwards we draw that fragment.
-            
-            # self.draw_faces(obj_frame_data)
     
     @Profiler.timed()
     def bary_terpolate_2d(self, w0, w1, w2, triangle, triangle_ws):
@@ -1232,17 +899,14 @@ class Renderer:
         except IndexError:
             return None
 
-    def assemble(self, obj_frame_data: ObjectFrameData, vertex_faces: np.ndarray, normal_faces: np.ndarray, uv_faces: np.ndarray):
-        # We assemble the vertices by updating the following:
-        # obj_frame_data.vertex_faces
-        # obj_frame_data.normal_faces (if exists)
-        # obj_frame_data.uv_faces (if exists)
-        # obj_frame_data.face_shade (temporary)
-        # obj_frame_data.face_shade = obj_frame_data.face_shade[obj_frame_data.faces_kept]
+    def assemble(self, obj_frame_data: ObjectFrameData, vertex_faces: np.ndarray, normal_faces: np.ndarray, uv_faces: np.ndarray, face_normals: np.ndarray):
         obj_frame_data.vertex_faces = vertex_faces[obj_frame_data.faces_kept]
-        obj_frame_data.normal_faces = normal_faces[obj_frame_data.faces_kept]
-        obj_frame_data.uv_faces = uv_faces[obj_frame_data.faces_kept]
-        pass
+        if normal_faces is not None and len(normal_faces) == len(obj_frame_data.faces_kept):
+            obj_frame_data.normal_faces = normal_faces[obj_frame_data.faces_kept]
+        if uv_faces is not None and len(uv_faces) == len(obj_frame_data.faces_kept):
+            obj_frame_data.uv_faces = uv_faces[obj_frame_data.faces_kept]
+        if face_normals is not None and len(face_normals) == len(obj_frame_data.faces_kept):
+            obj_frame_data.face_normals = face_normals[obj_frame_data.faces_kept]
 
     @Profiler.timed("render_buffer")
     def render_buffer(self):
