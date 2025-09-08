@@ -60,9 +60,9 @@ debug_win.create_slider_input_float("CAMERA_SPEED", render_config.camera_speed, 
 debug_win.create_slider_input_float("CAMERA_SENSITIVITY", render_config.camera_sensitivity, min_val=0.01, max_val=20)
 
 # ========== Object initialization ==========
-# RENDER_OBJECTS = scenes.scene_all()
-# RENDER_OBJECTS = scenes.scene_ship_only()
 RENDER_OBJECTS = scenes.scene_all()
+# RENDER_OBJECTS = scenes.scene_ship_only()
+# RENDER_OBJECTS = scenes.scene_fox_floor_sky()
 
 # Documenting... We can also use .transform.set_rotation() and .transform.set_scale()
 
@@ -630,6 +630,7 @@ class Renderer:
         # ========= Setup =========
         # Lights should go FROM the object TO the light.
         # This means the light will look like it's going down even though the matrix points up.
+        # TODO kinda ignoring lighting for now.
         light = np.array([0, 1, 0])
 
         view_matrix = v.compute_view_matrix()
@@ -648,7 +649,10 @@ class Renderer:
             obj_frame_data.uv_faces = r_object.uv_faces.copy()
             
             obj_frame_data.homogeneous_vertices = v.to_homogeneous_vertices(r_object)
-            obj_frame_data.model_matrix = v.get_model_matrix(r_object, angle)
+            object_transform = r_object.transform
+            if  "skybox" not in r_object.name:
+                object_transform = object_transform.with_rotation([angle, angle, 0])
+            obj_frame_data.model_matrix = object_transform.get_matrix()
             m = obj_frame_data.model_matrix
             mv = view_matrix @ obj_frame_data.model_matrix
             mvp = self.projection_matrix @ view_matrix @ obj_frame_data.model_matrix
@@ -712,7 +716,10 @@ class Renderer:
             # TODO access screen space from something like `obj_frame_data.screen_space_vertices`
             for i, _ in enumerate(obj_frame_data.vertex_faces):
                 triangle_screen_vertices = obj_frame_data.screen_space_triangles[i]
-                triangle_normals = self.get_normal_triangle(obj_frame_data.vertex_normals, obj_frame_data.normal_faces, i)
+                if obj_frame_data.world_normals is not None:
+                    triangle_normals = self.get_normal_triangle(obj_frame_data.world_normals, obj_frame_data.normal_faces, i)
+                else:
+                    triangle_normals = self.get_normal_triangle(obj_frame_data.vertex_normals, obj_frame_data.normal_faces, i)
                 if obj_frame_data.uv_coords is not None:
                     triangle_uvs = self.get_uv_triangle(obj_frame_data.uv_coords, obj_frame_data.uv_faces, i)
                 else:
